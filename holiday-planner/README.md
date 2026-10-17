@@ -109,7 +109,8 @@ The default config path is `holiday_planner.config.json` in the same folder as t
 ## Project layout
 
 ```
-team-holiday-planner/
+holiday-planner/
+├── AGENTS.md                     # agent context (Cursor auto-loads in this folder)
 ├── README.md
 ├── requirements.txt
 ├── holiday_planner.config.json
