@@ -9,7 +9,7 @@ Help a Scrum team plan sprints in one shared Excel workbook: **capacity**, **com
 The tool should:
 
 - Create **one tab per sprint** (from JSON config) plus **Product backlog** and **Velocity** summary tabs.
-- On each sprint tab: sprint metadata (dates, goal), **capacity calculator** per team member (PTO, FTE % → story points), and a **sprint backlog** table with dropdowns.
+- On each sprint tab: left **metadata** (dates, goal); right **overview KPIs** (planning velocity, previous sprint velocity, suggested limit, committed SP, buffer, over-commit flag); **capacity & load** (per-member assigned/headroom from Committed?=Y); **sprint backlog** with Priority, Committed?, dependency column.
 - Compute **sprint results** with Excel formulas: committed SP, completed SP, velocity, carry-over, completion %, load vs team capacity.
 - **Velocity** tab links to each sprint’s result cells; includes rolling average velocity and a suggested next-sprint capacity hint.
 - **Product backlog** tab for ranked items not yet assigned to a sprint (target sprint dropdown points at configured sprint sheet names).

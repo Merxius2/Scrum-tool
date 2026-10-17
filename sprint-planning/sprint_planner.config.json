@@ -10,6 +10,7 @@
   "story_point_scale": [1, 2, 3, 5, 8, 13],
   "work_item_types": ["Story", "Bug", "Task", "Spike"],
   "statuses": ["To Do", "In Progress", "Done", "Blocked"],
+  "priorities": ["1 - Must", "2 - Should", "3 - Could"],
   "default_fte_percent": 100,
   "story_points_per_day": 1,
   "sprint_length_weeks": 2,

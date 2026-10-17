@@ -30,12 +30,13 @@ Generate an Excel workbook for Scrum sprint planning: capacity per engineer, spr
 
 ## Using a sprint tab
 
-1. Set **Start** (and **Sprint goal**). **End (auto)** is calculated from the configured sprint length (`WORKDAY`); change Start in Excel and End, working days, and capacity update automatically.
-2. **Capacity**: enter **PTO days** and **FTE %** per person. Member capacity = `(sprint working days − PTO) × FTE% × story_points_per_day`. **Team capacity (SP)** is the sum.
-3. **Sprint backlog**: add work items; pick **Story points**, **Type**, **Assignee**, and **Status** from dropdowns.
-4. Mark finished items **Done** — the **Done SP** column and **Sprint results** block update automatically.
-5. Enter **Planning velocity (SP)** (expected throughput from past sprints). **Suggested story point limit** = `MIN(team capacity, planning velocity)` — leave velocity blank to use capacity only.
-6. Before sprint start, watch **Committed vs suggested limit** (and **Load vs capacity**). Green/yellow/red formatting highlights over-commitment.
+Layout follows common sprint-planning templates: **overview KPIs** (top-right), **capacity & load**, **backlog with commit flag**, then **results**.
+
+1. Set **Start** and **Sprint goal**. **End (auto)** follows configured sprint length (`WORKDAY`).
+2. **Sprint overview** (columns F–G): enter **Planning velocity**; see **Previous sprint velocity** (from the prior tab), **Suggested SP limit**, **Committed SP**, **Buffer**, and **Commitment status** (`OVER COMMITTED` when above limit).
+3. **Team capacity & load**: **PTO** and **FTE %** per person; **Assigned SP** rolls up backlog rows where **Committed? = Y**; **Headroom** turns red if someone is overloaded.
+4. **Sprint backlog**: add items; set **Committed?** to **Y** only for work the team agrees to take (candidates can stay blank/N). Use **Priority**, **Dependency / blocker**, **Assignee**, **Status**.
+5. After the sprint, set **Status** to **Done** — **Sprint results** and the **Velocity** tab update from completed points.
 
 ## Configuration
 
