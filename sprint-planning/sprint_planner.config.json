@@ -14,6 +14,8 @@
   "default_focus_percent": 80,
   "story_points_per_day": 1,
   "sprint_length_weeks": 2,
+  "default_planning_velocity": 30,
+  "prefill_velocity_from_rolling_average": true,
   "max_backlog_rows_per_sprint": 30,
   "product_backlog_rows": 40,
   "sprints": [

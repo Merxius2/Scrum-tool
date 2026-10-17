@@ -34,7 +34,8 @@ Generate an Excel workbook for Scrum sprint planning: capacity per engineer, spr
 2. **Capacity**: enter **PTO days** and adjust **Availability %** / **Focus %** per person. **Team capacity (SP)** sums individual capacity using working days (`NETWORKDAYS`, Mon–Fri only).
 3. **Sprint backlog**: add work items; pick **Story points**, **Type**, **Assignee**, and **Status** from dropdowns.
 4. Mark finished items **Done** — the **Done SP** column and **Sprint results** block update automatically.
-5. Before sprint start, compare **Load vs capacity** (committed SP ÷ team capacity). Green/yellow/red conditional formatting highlights over-commitment.
+5. Enter **Planning velocity (SP)** (expected throughput from past sprints). **Suggested story point limit** = `MIN(team capacity, planning velocity)` — leave velocity blank to use capacity only.
+6. Before sprint start, watch **Committed vs suggested limit** (and **Load vs capacity**). Green/yellow/red formatting highlights over-commitment.
 
 ## Configuration
 
@@ -53,6 +54,8 @@ File: `sprint_planner.config.json`
 | `story_points_per_day` | SP multiplier at 100% avail/focus per working day (default: 1). |
 | `sprint_length_weeks` | Sprint span as weeks × 5 working days (default: 2 → 10 days). Ignored if `sprint_length_working_days` is set. |
 | `sprint_length_working_days` | Exact Mon–Fri days per sprint, inclusive of start and end (overrides `sprint_length_weeks`). |
+| `default_planning_velocity` | Optional starting value for **Planning velocity** on the first sprint tab. |
+| `prefill_velocity_from_rolling_average` | When true (default), sprint 2+ prefills planning velocity from the Velocity tab rolling average (editable in Excel). |
 | `max_backlog_rows_per_sprint` | Fixed backlog size per sprint tab (default: 30). |
 | `product_backlog_rows` | Rows on Product backlog tab (default: 40). |
 
@@ -72,6 +75,7 @@ File: `sprint_planner.config.json`
 - `start` — ISO date (`YYYY-MM-DD`) for the first day of the sprint; end date is computed in the sheet.
 - `goal` — Free-text sprint goal.
 - `sprint_length_working_days` or `working_days` (optional) — override global sprint length for this tab only.
+- `planning_velocity` (optional) — fixed planning velocity for this sprint instead of default / rolling average.
 
 ## Command-line options
 

@@ -23,6 +23,7 @@ Generated output is **`Sprint-Planning.xlsx`** (gitignored; recreate with the sc
 - **`generate_sprint_planner.py`** — Python 3 generator using **openpyxl**.
 - **`sprint_planner.config.json`** — team members, sprint list (sheet name, start date, goal), global **`sprint_length_weeks`** or **`sprint_length_working_days`**, story-point scale, statuses/types, capacity defaults, row counts.
 - **Sprint end date**: `End (auto)` cell uses `=WORKDAY(Start, length−1)` so editing Start in Excel recalculates end, `NETWORKDAYS`, and capacity. Per-sprint length override via `working_days` / `sprint_length_working_days` on a sprint entry.
+- **Planning velocity & commit limit**: editable **Planning velocity (SP)** per sprint; **Suggested story point limit** = `MIN(team capacity, planning velocity)` (capacity only if velocity blank). Sprint results still report **completed** velocity separately. Optional config: `default_planning_velocity`, `prefill_velocity_from_rolling_average` (sprint 2+ links to Velocity tab).
 - **Sprint sheet layout**: fixed sections so summary cell addresses are stable for cross-sheet references on **Velocity**.
 - **Capacity**: `NETWORKDAYS` between Start and End (auto); per-member capacity = `(sprint working days − PTO) × availability × focus × story_points_per_day`.
 - **Backlog**: ID, title, type, SP, assignee, status, notes; **Done SP** column formula when status is Done.

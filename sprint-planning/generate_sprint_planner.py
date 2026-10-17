@@ -112,6 +112,10 @@ def load_config(path: Path) -> dict[str, Any]:
         "product_backlog_rows": int(data.get("product_backlog_rows", 40)),
         "sprint_length_working_days": data.get("sprint_length_working_days"),
         "sprint_length_weeks": data.get("sprint_length_weeks"),
+        "default_planning_velocity": data.get("default_planning_velocity"),
+        "prefill_velocity_from_rolling_average": bool(
+            data.get("prefill_velocity_from_rolling_average", True)
+        ),
         "sprints": sprints,
     }
 
@@ -137,19 +141,56 @@ def style_header_row(ws, row: int, min_col: int, max_col: int):
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 
+def velocity_rolling_average_row(sprint_count: int) -> int:
+    """Row on Velocity tab with rolling average formula (must match build_velocity_sheet)."""
+    header_row = 4
+    data_start = header_row + 1
+    last_data = data_start + sprint_count - 1
+    return last_data + 2
+
+
+def initial_planning_velocity(
+    sprint_index: int, sprint: dict[str, Any], cfg: dict[str, Any]
+) -> float | str | None:
+    if "planning_velocity" in sprint:
+        return float(sprint["planning_velocity"])
+    if sprint_index == 0:
+        default = cfg.get("default_planning_velocity")
+        return default if default is not None else None
+    if cfg.get("prefill_velocity_from_rolling_average", True):
+        row = velocity_rolling_average_row(len(cfg["sprints"]))
+        return f"=Velocity!$B${row}"
+    default = cfg.get("default_planning_velocity")
+    return default if default is not None else None
+
+
+def suggested_limit_formula(team_capacity_row: int, planning_velocity_row: int) -> str:
+    cap = f"E{team_capacity_row}"
+    vel = f"B{planning_velocity_row}"
+    return (
+        f'=IF({cap}=0,"",IF({vel}="",{cap},MIN({cap},{vel})))'
+    )
+
+
 def sprint_sheet_layout(team_count: int, max_backlog_rows: int) -> dict[str, int]:
     capacity_last = CAPACITY_FIRST_DATA_ROW + team_count - 1
     team_total_row = capacity_last + 1
-    backlog_title_row = team_total_row + 2
+    planning_title_row = team_total_row + 2
+    planning_velocity_row = team_total_row + 3
+    suggested_limit_row = team_total_row + 4
+    backlog_title_row = team_total_row + 6
     backlog_header_row = backlog_title_row + 1
     backlog_first_data = backlog_header_row + 1
     backlog_last_data = backlog_first_data + max_backlog_rows - 1
     summary_title_row = backlog_last_data + 2
     summary_first_row = summary_title_row + 1
-    summary_last_row = summary_first_row + 7
+    summary_last_row = summary_first_row + 9
     return {
         "capacity_last": capacity_last,
         "team_total_row": team_total_row,
+        "planning_title_row": planning_title_row,
+        "planning_velocity_row": planning_velocity_row,
+        "suggested_limit_row": suggested_limit_row,
         "backlog_title_row": backlog_title_row,
         "backlog_header_row": backlog_header_row,
         "backlog_first_data": backlog_first_data,
@@ -164,6 +205,7 @@ def build_sprint_sheet(
     ws,
     sprint: dict[str, Any],
     cfg: dict[str, Any],
+    sprint_index: int = 0,
 ) -> dict[str, Any]:
     team = cfg["team_members"]
     max_rows = cfg["max_backlog_rows_per_sprint"]
@@ -249,6 +291,35 @@ def build_sprint_sheet(
     ws.cell(row=tr, column=COL_CAPACITY).font = Font(bold=True)
     ws.cell(row=tr, column=COL_CAPACITY).fill = SECTION_FILL
 
+    pt = layout["planning_title_row"]
+    pvr = layout["planning_velocity_row"]
+    slr = layout["suggested_limit_row"]
+    ws.cell(row=pt, column=1, value="Sprint planning")
+    ws.cell(row=pt, column=1).font = Font(bold=True, size=12)
+    ws.cell(row=pvr, column=1, value="Planning velocity (SP)")
+    ws.cell(row=pvr, column=1).font = Font(bold=True)
+    vel_initial = initial_planning_velocity(sprint_index, sprint, cfg)
+    vel_cell = ws.cell(row=pvr, column=2, value=vel_initial if vel_initial is not None else "")
+    vel_cell.fill = SUMMARY_FILL
+    ws.cell(
+        row=pvr,
+        column=3,
+        value="Editable: past throughput; later sprints may prefill from Velocity tab",
+    )
+    ws.cell(row=slr, column=1, value="Suggested story point limit")
+    ws.cell(row=slr, column=1).font = Font(bold=True)
+    limit_cell = ws.cell(
+        row=slr,
+        column=2,
+        value=suggested_limit_formula(tr, pvr),
+    )
+    limit_cell.fill = WARN_FILL
+    ws.cell(
+        row=slr,
+        column=3,
+        value="MIN(team capacity, planning velocity) when both are set",
+    )
+
     bt = layout["backlog_title_row"]
     ws.cell(row=bt, column=1, value="Sprint backlog")
     ws.cell(row=bt, column=1).font = Font(bold=True, size=12)
@@ -303,6 +374,14 @@ def build_sprint_sheet(
             "Load vs capacity",
             f'=IF({team_cap}=0,"",B{layout["summary_first_row"]}/{team_cap})',
         ),
+        (
+            "Suggested story point limit",
+            f"=B{slr}",
+        ),
+        (
+            "Committed vs suggested limit",
+            f'=IF(B{slr}=0,"",B{layout["summary_first_row"]}/B{slr})',
+        ),
     ]
 
     for offset, (label, formula) in enumerate(summary_rows):
@@ -311,13 +390,13 @@ def build_sprint_sheet(
         ws.cell(row=row, column=1).font = Font(bold=True)
         cell = ws.cell(row=row, column=2, value=formula)
         cell.fill = SUMMARY_FILL
-        if "Completion" in label or "Load vs" in label:
+        if "Completion" in label or "Load vs" in label or "Committed vs" in label:
             cell.number_format = "0%"
 
     ws.cell(
         row=layout["summary_last_row"] + 1,
         column=1,
-        value="Tip: compare Load vs capacity before sprint start; velocity feeds the Velocity sheet.",
+        value="Tip: set Planning velocity and keep Committed SP at or below the suggested limit.",
     )
     ws.merge_cells(
         start_row=layout["summary_last_row"] + 1,
@@ -361,22 +440,25 @@ def build_sprint_sheet(
     )
 
     load_row = layout["summary_first_row"] + 6
-    ws.conditional_formatting.add(
-        f"B{load_row}",
-        ColorScaleRule(
-            start_type="num",
-            start_value=0,
-            start_color="63BE7B",
-            mid_type="num",
-            mid_value=1,
-            mid_color="FFEB84",
-            end_type="num",
-            end_value=1.15,
-            end_color="F8696B",
-        ),
-    )
+    limit_ratio_row = layout["summary_first_row"] + 8
+    for cf_row in (load_row, limit_ratio_row):
+        ws.conditional_formatting.add(
+            f"B{cf_row}",
+            ColorScaleRule(
+                start_type="num",
+                start_value=0,
+                start_color="63BE7B",
+                mid_type="num",
+                mid_value=1,
+                mid_color="FFEB84",
+                end_type="num",
+                end_value=1.15,
+                end_color="F8696B",
+            ),
+        )
 
     apply_table_borders(ws, CAPACITY_HEADER_ROW, tr, COL_MEMBER, COL_CAPACITY)
+    apply_table_borders(ws, pvr, slr, 1, 2)
     apply_table_borders(ws, bh, bl, 1, BACKLOG_DONE_SP)
     apply_table_borders(
         ws,
@@ -412,6 +494,8 @@ def build_sprint_sheet(
         "completion_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 4}",
         "capacity_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 5}",
         "load_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 6}",
+        "suggested_limit_cell": f"'{sheet_name}'!$B${slr}",
+        "planning_velocity_cell": f"'{sheet_name}'!$B${pvr}",
         "working_days_cell": f"'{sheet_name}'!$B${META_WORKING_DAYS_ROW}",
     }
 
@@ -424,7 +508,7 @@ def build_velocity_sheet(ws, sprint_meta: list[dict[str, Any]], cfg: dict[str, A
     ws.cell(
         row=2,
         column=1,
-        value="Metrics pull from each sprint tab. Update backlog status to Done to refresh completed points.",
+        value="Completed metrics pull from sprint tabs. Enter Planning velocity on each sprint for commit limits.",
     )
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=10)
 
@@ -591,14 +675,14 @@ def generate(config_path: Path) -> Path:
     build_product_backlog_sheet(wb.create_sheet(), cfg)
 
     sprint_meta: list[dict[str, Any]] = []
-    for entry in cfg["sprints"]:
+    for i, entry in enumerate(cfg["sprints"]):
         if not isinstance(entry, dict):
             raise ValueError('Each "sprints" item must be an object.')
         for key in ("sheet_name", "start"):
             if key not in entry:
                 raise ValueError(f'Sprint entry missing "{key}".')
         ws = wb.create_sheet()
-        meta = build_sprint_sheet(ws, entry, cfg)
+        meta = build_sprint_sheet(ws, entry, cfg, sprint_index=i)
         sprint_meta.append(meta)
 
     build_velocity_sheet(wb.create_sheet(), sprint_meta, cfg)
