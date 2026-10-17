@@ -1,0 +1,22 @@
+{
+  "output_file": "Team-Holiday-Planner.xlsx",
+  "holiday_marker": "H",
+  "team_members": [
+    "Engineer 1",
+    "Engineer 2",
+    "Engineer 3",
+    "Engineer 4",
+    "Engineer 5"
+  ],
+  "years": [
+    {
+      "sheet_name": "Rest of 2026",
+      "from": "remainder",
+      "through": "2026-12-31"
+    },
+    {
+      "sheet_name": "2027",
+      "year": 2027
+    }
+  ]
+}
