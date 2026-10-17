@@ -56,6 +56,37 @@ def parse_date(value: str):
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
+def resolve_sprint_length_working_days(
+    sprint: dict[str, Any] | None, cfg: dict[str, Any]
+) -> int:
+    """Working days in a sprint (Mon–Fri), inclusive of start and end."""
+    if sprint is not None:
+        for key in ("sprint_length_working_days", "working_days"):
+            if key in sprint:
+                days = int(sprint[key])
+                if days < 1:
+                    raise ValueError(f"Sprint {sprint.get('sheet_name', '?')}: {key} must be >= 1.")
+                return days
+
+    if cfg.get("sprint_length_working_days") is not None:
+        days = int(cfg["sprint_length_working_days"])
+    elif cfg.get("sprint_length_weeks") is not None:
+        days = int(cfg["sprint_length_weeks"]) * 5
+    else:
+        days = 10
+
+    if days < 1:
+        raise ValueError("sprint_length_working_days / sprint_length_weeks must yield at least 1 day.")
+    return days
+
+
+def sprint_end_formula(working_days: int) -> str:
+    """Excel end date from start in B{META_START_ROW}, inclusive working-day span."""
+    if working_days <= 1:
+        return f"=B{META_START_ROW}"
+    return f"=WORKDAY(B{META_START_ROW},{working_days - 1})"
+
+
 def load_config(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as f:
         data = json.load(f)
@@ -79,6 +110,8 @@ def load_config(path: Path) -> dict[str, Any]:
         "story_points_per_day": float(data.get("story_points_per_day", 1)),
         "max_backlog_rows_per_sprint": int(data.get("max_backlog_rows_per_sprint", 30)),
         "product_backlog_rows": int(data.get("product_backlog_rows", 40)),
+        "sprint_length_working_days": data.get("sprint_length_working_days"),
+        "sprint_length_weeks": data.get("sprint_length_weeks"),
         "sprints": sprints,
     }
 
@@ -141,7 +174,7 @@ def build_sprint_sheet(
 
     title = sprint.get("title") or sheet_name
     start = parse_date(str(sprint["start"]))
-    end = parse_date(str(sprint["end"]))
+    working_days = resolve_sprint_length_working_days(sprint, cfg)
     goal = sprint.get("goal", "")
 
     ws.cell(row=META_TITLE_ROW, column=1, value="Sprint")
@@ -149,9 +182,14 @@ def build_sprint_sheet(
     ws.cell(row=META_START_ROW, column=1, value="Start")
     ws.cell(row=META_START_ROW, column=2, value=start)
     ws.cell(row=META_START_ROW, column=2).number_format = "yyyy-mm-dd"
-    ws.cell(row=META_END_ROW, column=1, value="End")
-    ws.cell(row=META_END_ROW, column=2, value=end)
-    ws.cell(row=META_END_ROW, column=2).number_format = "yyyy-mm-dd"
+    ws.cell(row=META_END_ROW, column=1, value="End (auto)")
+    end_cell = ws.cell(row=META_END_ROW, column=2, value=sprint_end_formula(working_days))
+    end_cell.number_format = "yyyy-mm-dd"
+    ws.cell(
+        row=META_END_ROW,
+        column=3,
+        value=f"{working_days} working days from start",
+    )
     ws.cell(row=META_GOAL_ROW, column=1, value="Sprint goal")
     ws.cell(row=META_GOAL_ROW, column=2, value=goal)
     ws.merge_cells(
@@ -359,11 +397,14 @@ def build_sprint_sheet(
 
     ws.freeze_panes = ws.cell(row=bf, column=BACKLOG_TITLE).coordinate
 
+    start_cell = f"'{sheet_name}'!$B${META_START_ROW}"
+    end_cell_ref = f"'{sheet_name}'!$B${META_END_ROW}"
+
     return {
         "sheet_name": sheet_name,
-        "start": start,
-        "end": end,
         "goal": goal,
+        "start_cell": start_cell,
+        "end_cell": end_cell_ref,
         "committed_cell": f"'{sheet_name}'!$B${layout['summary_first_row']}",
         "completed_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 1}",
         "velocity_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 2}",
@@ -409,9 +450,9 @@ def build_velocity_sheet(ws, sprint_meta: list[dict[str, Any]], cfg: dict[str, A
     for i, meta in enumerate(sprint_meta):
         row = data_start + i
         ws.cell(row=row, column=1, value=meta["sheet_name"])
-        ws.cell(row=row, column=2, value=meta["start"])
+        ws.cell(row=row, column=2, value=f"={meta['start_cell']}")
         ws.cell(row=row, column=2).number_format = "yyyy-mm-dd"
-        ws.cell(row=row, column=3, value=meta["end"])
+        ws.cell(row=row, column=3, value=f"={meta['end_cell']}")
         ws.cell(row=row, column=3).number_format = "yyyy-mm-dd"
         ws.cell(row=row, column=4, value=f"={meta['working_days_cell']}")
         ws.cell(row=row, column=5, value=meta["goal"])
@@ -553,7 +594,7 @@ def generate(config_path: Path) -> Path:
     for entry in cfg["sprints"]:
         if not isinstance(entry, dict):
             raise ValueError('Each "sprints" item must be an object.')
-        for key in ("sheet_name", "start", "end"):
+        for key in ("sheet_name", "start"):
             if key not in entry:
                 raise ValueError(f'Sprint entry missing "{key}".')
         ws = wb.create_sheet()

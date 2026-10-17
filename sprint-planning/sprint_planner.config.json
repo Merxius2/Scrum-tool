@@ -13,6 +13,7 @@
   "default_availability_percent": 100,
   "default_focus_percent": 80,
   "story_points_per_day": 1,
+  "sprint_length_weeks": 2,
   "max_backlog_rows_per_sprint": 30,
   "product_backlog_rows": 40,
   "sprints": [
@@ -20,21 +21,18 @@
       "sheet_name": "Sprint 1",
       "title": "Sprint 1 — Kickoff",
       "start": "2026-10-20",
-      "end": "2026-11-02",
       "goal": "Establish sprint rhythm and deliver first increment"
     },
     {
       "sheet_name": "Sprint 2",
       "title": "Sprint 2 — Delivery",
       "start": "2026-11-03",
-      "end": "2026-11-16",
       "goal": "Ship planned stories and refine backlog"
     },
     {
       "sheet_name": "Sprint 3",
       "title": "Sprint 3 — Hardening",
       "start": "2026-11-17",
-      "end": "2026-11-30",
       "goal": "Reduce carry-over and stabilise velocity"
     }
   ]

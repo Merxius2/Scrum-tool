@@ -30,7 +30,7 @@ Generate an Excel workbook for Scrum sprint planning: capacity per engineer, spr
 
 ## Using a sprint tab
 
-1. Confirm **Start**, **End**, and **Sprint goal** (editable after generation).
+1. Set **Start** (and **Sprint goal**). **End (auto)** is calculated from the configured sprint length (`WORKDAY`); change Start in Excel and End, working days, and capacity update automatically.
 2. **Capacity**: enter **PTO days** and adjust **Availability %** / **Focus %** per person. **Team capacity (SP)** sums individual capacity using working days (`NETWORKDAYS`, Mon–Fri only).
 3. **Sprint backlog**: add work items; pick **Story points**, **Type**, **Assignee**, and **Status** from dropdowns.
 4. Mark finished items **Done** — the **Done SP** column and **Sprint results** block update automatically.
@@ -51,6 +51,8 @@ File: `sprint_planner.config.json`
 | `default_availability_percent` | Initial availability column (default: 100). |
 | `default_focus_percent` | Initial focus column (default: 80). |
 | `story_points_per_day` | SP multiplier at 100% avail/focus per working day (default: 1). |
+| `sprint_length_weeks` | Sprint span as weeks × 5 working days (default: 2 → 10 days). Ignored if `sprint_length_working_days` is set. |
+| `sprint_length_working_days` | Exact Mon–Fri days per sprint, inclusive of start and end (overrides `sprint_length_weeks`). |
 | `max_backlog_rows_per_sprint` | Fixed backlog size per sprint tab (default: 30). |
 | `product_backlog_rows` | Rows on Product backlog tab (default: 40). |
 
@@ -61,15 +63,15 @@ File: `sprint_planner.config.json`
   "sheet_name": "Sprint 1",
   "title": "Sprint 1 — Kickoff",
   "start": "2026-10-20",
-  "end": "2026-11-02",
   "goal": "Deliver first increment"
 }
 ```
 
 - `sheet_name` — Excel tab name (max 31 characters).
 - `title` — Display name on the sprint tab (optional; defaults to sheet name).
-- `start` / `end` — ISO dates (`YYYY-MM-DD`).
+- `start` — ISO date (`YYYY-MM-DD`) for the first day of the sprint; end date is computed in the sheet.
 - `goal` — Free-text sprint goal.
+- `sprint_length_working_days` or `working_days` (optional) — override global sprint length for this tab only.
 
 ## Command-line options
 
