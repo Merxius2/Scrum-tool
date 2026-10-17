@@ -31,7 +31,7 @@ Generate an Excel workbook for Scrum sprint planning: capacity per engineer, spr
 ## Using a sprint tab
 
 1. Set **Start** (and **Sprint goal**). **End (auto)** is calculated from the configured sprint length (`WORKDAY`); change Start in Excel and End, working days, and capacity update automatically.
-2. **Capacity**: enter **PTO days** and adjust **Availability %** / **Focus %** per person. **Team capacity (SP)** sums individual capacity using working days (`NETWORKDAYS`, Mon–Fri only).
+2. **Capacity**: enter **PTO days** and **FTE %** per person. Member capacity = `(sprint working days − PTO) × FTE% × story_points_per_day`. **Team capacity (SP)** is the sum.
 3. **Sprint backlog**: add work items; pick **Story points**, **Type**, **Assignee**, and **Status** from dropdowns.
 4. Mark finished items **Done** — the **Done SP** column and **Sprint results** block update automatically.
 5. Enter **Planning velocity (SP)** (expected throughput from past sprints). **Suggested story point limit** = `MIN(team capacity, planning velocity)` — leave velocity blank to use capacity only.
@@ -49,9 +49,8 @@ File: `sprint_planner.config.json`
 | `story_point_scale` | Allowed values in SP dropdowns (default: 1, 2, 3, 5, 8, 13). |
 | `work_item_types` | Backlog type dropdown (default: Story, Bug, Task, Spike). |
 | `statuses` | Status dropdown (default: To Do, In Progress, Done, Blocked). |
-| `default_availability_percent` | Initial availability column (default: 100). |
-| `default_focus_percent` | Initial focus column (default: 80). |
-| `story_points_per_day` | SP multiplier at 100% avail/focus per working day (default: 1). |
+| `default_fte_percent` | Initial FTE % column per member (default: 100). Legacy key `default_availability_percent` still accepted. |
+| `story_points_per_day` | SP per full-time working day at 100% FTE (default: 1). |
 | `sprint_length_weeks` | Sprint span as weeks × 5 working days (default: 2 → 10 days). Ignored if `sprint_length_working_days` is set. |
 | `sprint_length_working_days` | Exact Mon–Fri days per sprint, inclusive of start and end (overrides `sprint_length_weeks`). |
 | `default_planning_velocity` | Optional starting value for **Planning velocity** on the first sprint tab. |

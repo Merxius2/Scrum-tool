@@ -9,7 +9,7 @@ Help a Scrum team plan sprints in one shared Excel workbook: **capacity**, **com
 The tool should:
 
 - Create **one tab per sprint** (from JSON config) plus **Product backlog** and **Velocity** summary tabs.
-- On each sprint tab: sprint metadata (dates, goal), **capacity calculator** per team member (PTO, availability %, focus % → story points), and a **sprint backlog** table with dropdowns.
+- On each sprint tab: sprint metadata (dates, goal), **capacity calculator** per team member (PTO, FTE % → story points), and a **sprint backlog** table with dropdowns.
 - Compute **sprint results** with Excel formulas: committed SP, completed SP, velocity, carry-over, completion %, load vs team capacity.
 - **Velocity** tab links to each sprint’s result cells; includes rolling average velocity and a suggested next-sprint capacity hint.
 - **Product backlog** tab for ranked items not yet assigned to a sprint (target sprint dropdown points at configured sprint sheet names).
@@ -25,7 +25,7 @@ Generated output is **`Sprint-Planning.xlsx`** (gitignored; recreate with the sc
 - **Sprint end date**: `End (auto)` cell uses `=WORKDAY(Start, length−1)` so editing Start in Excel recalculates end, `NETWORKDAYS`, and capacity. Per-sprint length override via `working_days` / `sprint_length_working_days` on a sprint entry.
 - **Planning velocity & commit limit**: editable **Planning velocity (SP)** per sprint; **Suggested story point limit** = `MIN(team capacity, planning velocity)` (capacity only if velocity blank). Sprint results still report **completed** velocity separately. Optional config: `default_planning_velocity`, `prefill_velocity_from_rolling_average` (sprint 2+ links to Velocity tab).
 - **Sprint sheet layout**: fixed sections so summary cell addresses are stable for cross-sheet references on **Velocity**.
-- **Capacity**: `NETWORKDAYS` between Start and End (auto); per-member capacity = `(sprint working days − PTO) × availability × focus × story_points_per_day`.
+- **Capacity**: `NETWORKDAYS` between Start and End (auto); per-member capacity = `(sprint working days − PTO) × FTE% × story_points_per_day` (no separate focus factor).
 - **Backlog**: ID, title, type, SP, assignee, status, notes; **Done SP** column formula when status is Done.
 - **Validation lists** for SP scale, type, status, assignee; conditional formatting on load vs capacity and velocity column.
 - **`requirements.txt`** — `openpyxl>=3.1.0`.

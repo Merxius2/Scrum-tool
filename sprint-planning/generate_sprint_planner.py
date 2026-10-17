@@ -38,9 +38,8 @@ CAPACITY_FIRST_DATA_ROW = 9
 
 COL_MEMBER = 1
 COL_PTO = 2
-COL_AVAIL = 3
-COL_FOCUS = 4
-COL_CAPACITY = 5
+COL_FTE = 3
+COL_CAPACITY = 4
 
 BACKLOG_ID = 1
 BACKLOG_TITLE = 2
@@ -105,8 +104,9 @@ def load_config(path: Path) -> dict[str, Any]:
         "story_point_scale": [int(x) for x in data.get("story_point_scale", [1, 2, 3, 5, 8, 13])],
         "work_item_types": [str(t) for t in data.get("work_item_types", ["Story", "Bug", "Task", "Spike"])],
         "statuses": [str(s) for s in data.get("statuses", ["To Do", "In Progress", "Done", "Blocked"])],
-        "default_availability_percent": float(data.get("default_availability_percent", 100)),
-        "default_focus_percent": float(data.get("default_focus_percent", 80)),
+        "default_fte_percent": float(
+            data.get("default_fte_percent", data.get("default_availability_percent", 100))
+        ),
         "story_points_per_day": float(data.get("story_points_per_day", 1)),
         "max_backlog_rows_per_sprint": int(data.get("max_backlog_rows_per_sprint", 30)),
         "product_backlog_rows": int(data.get("product_backlog_rows", 40)),
@@ -165,7 +165,7 @@ def initial_planning_velocity(
 
 
 def suggested_limit_formula(team_capacity_row: int, planning_velocity_row: int) -> str:
-    cap = f"E{team_capacity_row}"
+    cap = f"D{team_capacity_row}"
     vel = f"B{planning_velocity_row}"
     return (
         f'=IF({cap}=0,"",IF({vel}="",{cap},MIN({cap},{vel})))'
@@ -253,8 +253,7 @@ def build_sprint_sheet(
     headers = [
         "Team member",
         "PTO days",
-        "Availability %",
-        "Focus %",
+        "FTE %",
         "Capacity (SP)",
     ]
     for col, label in enumerate(headers, start=COL_MEMBER):
@@ -262,21 +261,19 @@ def build_sprint_sheet(
     style_header_row(ws, CAPACITY_HEADER_ROW, COL_MEMBER, COL_CAPACITY)
 
     sp_day = cfg["story_points_per_day"]
-    default_avail = cfg["default_availability_percent"]
-    default_focus = cfg["default_focus_percent"]
+    default_fte = cfg["default_fte_percent"]
     working_days_ref = f"$B${META_WORKING_DAYS_ROW}"
 
     for i, name in enumerate(team):
         row = CAPACITY_FIRST_DATA_ROW + i
         ws.cell(row=row, column=COL_MEMBER, value=name)
         ws.cell(row=row, column=COL_PTO, value=0)
-        ws.cell(row=row, column=COL_AVAIL, value=default_avail)
-        ws.cell(row=row, column=COL_FOCUS, value=default_focus)
+        ws.cell(row=row, column=COL_FTE, value=default_fte)
         ws.cell(
             row=row,
             column=COL_CAPACITY,
             value=(
-                f"=MAX(0,ROUND(({working_days_ref}-B{row})*C{row}/100*D{row}/100*{sp_day},1))"
+                f"=MAX(0,ROUND(({working_days_ref}-B{row})*C{row}/100*{sp_day},1))"
             ),
         )
 
@@ -286,7 +283,7 @@ def build_sprint_sheet(
     ws.cell(
         row=tr,
         column=COL_CAPACITY,
-        value=f"=SUM(E{CAPACITY_FIRST_DATA_ROW}:E{layout['capacity_last']})",
+        value=f"=SUM(D{CAPACITY_FIRST_DATA_ROW}:D{layout['capacity_last']})",
     )
     ws.cell(row=tr, column=COL_CAPACITY).font = Font(bold=True)
     ws.cell(row=tr, column=COL_CAPACITY).fill = SECTION_FILL
@@ -355,7 +352,7 @@ def build_sprint_sheet(
     sp_range = f"D{bf}:D{bl}"
     done_range = f"H{bf}:H{bl}"
     status_range = f"F{bf}:F{bl}"
-    team_cap = f"E{tr}"
+    team_cap = f"D{tr}"
 
     summary_rows = [
         ("Committed story points", f"=SUM({sp_range})"),
