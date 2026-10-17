@@ -17,6 +17,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 DEFAULT_CONFIG_NAME = "sprint_planner.config.json"
+INSTRUCTIONS_SHEET_NAME = "Instructions"
 
 THIN = Side(style="thin", color="CCCCCC")
 HEADER_FILL = PatternFill("solid", fgColor="E8EEF4")
@@ -762,6 +763,116 @@ def build_product_backlog_sheet(ws, cfg: dict[str, Any]):
     ws.freeze_panes = ws.cell(row=first, column=2).coordinate
 
 
+def _write_instructions_block(
+    ws,
+    row: int,
+    heading: str,
+    lines: list[str],
+) -> int:
+    """Write a heading and bullet lines; return next free row."""
+    ws.cell(row=row, column=1, value=heading).font = Font(bold=True, size=12)
+    row += 1
+    wrap = Alignment(wrap_text=True, vertical="top")
+    for text in lines:
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.alignment = wrap
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        row += 1
+    return row + 1
+
+
+def build_instructions_sheet(ws):
+    ws.title = INSTRUCTIONS_SHEET_NAME[:31]
+
+    ws.cell(row=1, column=1, value="How to use this sprint planning workbook")
+    ws.cell(row=1, column=1).font = Font(bold=True, size=14)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    ws.cell(
+        row=2,
+        column=1,
+        value="Fill in yellow/editable cells in Excel. Formulas and dropdowns update capacity, "
+        "commitments, and velocity automatically. Regenerate the file from sprint_planner.config.json "
+        "only when team names, sprint tabs, or layout change.",
+    )
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+    ws.cell(row=2, column=1).alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[2].height = 36
+
+    row = 4
+    row = _write_instructions_block(
+        ws,
+        row,
+        "Workbook tabs (left to right)",
+        [
+            "• Product backlog — ranked ideas not yet in a sprint; set Target sprint when ready.",
+            "• Velocity — history across sprints; rolling average helps set the next planning velocity.",
+            "• One tab per sprint — plan capacity, commit backlog items, record results.",
+            "• Instructions (this tab) — always last; safe to hide in Excel if you prefer.",
+        ],
+    )
+    row = _write_instructions_block(
+        ws,
+        row,
+        "Before sprint planning",
+        [
+            "• On the sprint tab, set Start date and Sprint goal. End date and working days calculate automatically.",
+            "• Enter PTO days and FTE % for each team member in Team capacity & load.",
+            "• In Sprint overview (columns F–G), enter Planning velocity (SP). Use Previous sprint velocity "
+            "as a guide; Sprint 2+ may prefill from the Velocity tab average.",
+            "• Check Suggested SP limit (MIN of team capacity and planning velocity) before committing work.",
+        ],
+    )
+    row = _write_instructions_block(
+        ws,
+        row,
+        "Committing work (sprint backlog)",
+        [
+            "• Add rows: ID, Title, Priority, Type, Story points, Assignee.",
+            "• Set Committed? to Y only for items the team agrees to deliver this sprint. Leave N or blank for candidates.",
+            "• Note dependencies or blockers in the Dependency column.",
+            "• Committed SP in the overview counts only rows with Committed? = Y.",
+            "• Watch Assigned SP and Headroom per person — red headroom means that person is over their capacity.",
+            "• Commitment status shows OVER COMMITTED if committed SP exceeds the suggested limit.",
+        ],
+    )
+    row = _write_instructions_block(
+        ws,
+        row,
+        "During and after the sprint",
+        [
+            "• Update Status (To Do → In Progress → Done). Done SP and Sprint results update from Done items.",
+            "• Velocity (completed SP) on the tab and Velocity sheet reflects completed story points.",
+            "• Use carry-over and completion % to discuss unfinished committed work in the retrospective.",
+        ],
+    )
+    row = _write_instructions_block(
+        ws,
+        row,
+        "Product backlog tab",
+        [
+            "• Keep the list ordered by rank (top = highest priority).",
+            "• Set Ready? when an item meets your definition of ready before pulling it into a sprint.",
+            "• Copy or re-enter items on a sprint tab when committing; link Target sprint for traceability.",
+        ],
+    )
+    _write_instructions_block(
+        ws,
+        row,
+        "Regenerate vs edit in Excel",
+        [
+            "• Edit names, dates, backlog, and statuses directly in Excel day to day.",
+            "• Run python3 generate_sprint_planner.py after changing sprint_planner.config.json "
+            "(team list, new sprint tabs, defaults). This overwrites the xlsx — export first if needed.",
+        ],
+    )
+
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 18
+    ws.sheet_view.showGridLines = True
+
+
 def generate(config_path: Path) -> Path:
     cfg = load_config(config_path)
     base_dir = config_path.resolve().parent
@@ -789,6 +900,8 @@ def generate(config_path: Path) -> Path:
     build_velocity_sheet(wb.create_sheet(), sprint_meta, cfg)
     if sprint_meta:
         wb.move_sheet(wb["Velocity"], offset=-len(sprint_meta))
+
+    build_instructions_sheet(wb.create_sheet())
 
     out = base_dir / cfg["output_file"]
     wb.save(out)

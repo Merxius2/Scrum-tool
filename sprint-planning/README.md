@@ -18,7 +18,7 @@ Generate an Excel workbook for Scrum sprint planning: capacity per engineer, spr
    python3 generate_sprint_planner.py
    ```
 
-4. Open `Sprint-Planning.xlsx` (or the filename set in config).
+4. Open `Sprint-Planning.xlsx` (or the filename set in config). Read the **Instructions** tab (last sheet) for a fill-in guide.
 
 ## Workbook tabs
 
@@ -27,6 +27,7 @@ Generate an Excel workbook for Scrum sprint planning: capacity per engineer, spr
 | **Product backlog** | Prioritised items not yet in a sprint; optional target sprint and “Ready?” flag. |
 | **Velocity** | Cross-sprint committed/completed SP, carry-over, completion %, rolling average velocity. |
 | **One tab per sprint** | Capacity, sprint backlog, and sprint results for that iteration. |
+| **Instructions** | Last tab — how to fill in the workbook (always appended after sprint tabs). |
 
 ## Using a sprint tab
 
@@ -50,6 +51,7 @@ File: `sprint_planner.config.json`
 | `story_point_scale` | Allowed values in SP dropdowns (default: 1, 2, 3, 5, 8, 13). |
 | `work_item_types` | Backlog type dropdown (default: Story, Bug, Task, Spike). |
 | `statuses` | Status dropdown (default: To Do, In Progress, Done, Blocked). |
+| `priorities` | Priority dropdown on sprint and product backlog (default: Must / Should / Could). |
 | `default_fte_percent` | Initial FTE % column per member (default: 100). Legacy key `default_availability_percent` still accepted. |
 | `story_points_per_day` | SP per full-time working day at 100% FTE (default: 1). |
 | `sprint_length_weeks` | Sprint span as weeks × 5 working days (default: 2 → 10 days). Ignored if `sprint_length_working_days` is set. |
@@ -95,7 +97,7 @@ sprint-planning/
 ├── requirements.txt
 ├── sprint_planner.config.json
 ├── generate_sprint_planner.py
-└── Sprint-Planning.xlsx           # created when you run the script
+└── Sprint-Planning.xlsx           # created when you run the script (includes Instructions tab)
 ```
 
 ## Requirements

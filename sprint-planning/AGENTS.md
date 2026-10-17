@@ -23,13 +23,15 @@ Generated output is **`Sprint-Planning.xlsx`** (gitignored; recreate with the sc
 - **`generate_sprint_planner.py`** — Python 3 generator using **openpyxl**.
 - **`sprint_planner.config.json`** — team members, sprint list (sheet name, start date, goal), global **`sprint_length_weeks`** or **`sprint_length_working_days`**, story-point scale, statuses/types, capacity defaults, row counts.
 - **Sprint end date**: `End (auto)` cell uses `=WORKDAY(Start, length−1)` so editing Start in Excel recalculates end, `NETWORKDAYS`, and capacity. Per-sprint length override via `working_days` / `sprint_length_working_days` on a sprint entry.
-- **Planning velocity & commit limit**: editable **Planning velocity (SP)** per sprint; **Suggested story point limit** = `MIN(team capacity, planning velocity)` (capacity only if velocity blank). Sprint results still report **completed** velocity separately. Optional config: `default_planning_velocity`, `prefill_velocity_from_rolling_average` (sprint 2+ links to Velocity tab).
+- **Planning velocity & commit limit**: overview panel (cols F–G, rows 2–7); **Suggested SP limit** = `MIN(team capacity, planning velocity)`; committed SP uses **SUMPRODUCT** on **Committed?=Y** only (TableTemplates / Rock-style). **Previous sprint velocity** links to prior tab completed SP.
+- **Per-person load**: Assigned SP / Headroom vs capacity; red fill when headroom &lt; 0.
 - **Sprint sheet layout**: fixed sections so summary cell addresses are stable for cross-sheet references on **Velocity**.
 - **Capacity**: `NETWORKDAYS` between Start and End (auto); per-member capacity = `(sprint working days − PTO) × FTE% × story_points_per_day` (no separate focus factor).
 - **Backlog**: ID, title, type, SP, assignee, status, notes; **Done SP** column formula when status is Done.
 - **Validation lists** for SP scale, type, status, assignee; conditional formatting on load vs capacity and velocity column.
 - **`requirements.txt`** — `openpyxl>=3.1.0`.
 - **`README.md`** — setup, config reference, CLI (`-c` for alternate config path).
+- **Instructions sheet** — in-workbook operator guide from `build_instructions_sheet()`; keep aligned with sprint tab layout.
 - Repo home: **`sprint-planning/`** inside [Scrum-tool](https://github.com/Merxius2/Scrum-tool.git); root README links here.
 
 ## Suggested extensions (not implemented unless requested)
@@ -54,7 +56,7 @@ Generated output is **`Sprint-Planning.xlsx`** (gitignored; recreate with the sc
 - Prefer **config over hardcoding** (team, sprints, scales, defaults, output filename).
 - If you change sprint sheet **row layout**, update **Velocity** link generation and document the new anchor rows here.
 - Preserve **Excel formulas** in summary and Done SP columns.
-- Sheet tab order: **Product backlog**, **Velocity**, then sprints in config order.
+- Sheet tab order: **Product backlog**, **Velocity**, sprints in config order, **Instructions** last (generated text; update `build_instructions_sheet` when UX changes).
 - Minimize dependencies; stay on **openpyxl** unless there is a strong reason to add more.
 
 ## Keeping this file up to date
