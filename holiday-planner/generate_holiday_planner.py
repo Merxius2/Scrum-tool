@@ -23,7 +23,8 @@ DEFAULT_CONFIG_NAME = "holiday_planner.config.json"
 WEEK_ROW = 1
 DAY_ROW = 2
 NAME_COL = 1
-FIRST_DAY_COL = 2
+COUNT_COL = 2
+FIRST_DAY_COL = 3
 FIRST_DATA_ROW = 3
 
 THIN = Side(style="thin", color="CCCCCC")
@@ -181,6 +182,14 @@ def build_sheet(
         end_row=DAY_ROW,
         end_column=NAME_COL,
     )
+    ws.cell(row=WEEK_ROW, column=COUNT_COL, value="Days off")
+    ws.cell(row=DAY_ROW, column=COUNT_COL, value="")
+    ws.merge_cells(
+        start_row=WEEK_ROW,
+        start_column=COUNT_COL,
+        end_row=DAY_ROW,
+        end_column=COUNT_COL,
+    )
 
     col = FIRST_DAY_COL
     day_columns = []
@@ -206,6 +215,9 @@ def build_sheet(
             )
 
     last_day_col = col - 1
+    first_day_letter = get_column_letter(FIRST_DAY_COL)
+    last_day_letter = get_column_letter(last_day_col)
+    marker_escaped = holiday_marker.replace('"', '""')
 
     for i, name in enumerate(team_members):
         row = FIRST_DATA_ROW + i
@@ -213,8 +225,17 @@ def build_sheet(
         name_cell = ws.cell(row=row, column=NAME_COL, value=name)
         name_cell.fill = PatternFill("solid", fgColor=color)
         name_cell.font = Font(bold=True, color=contrasting_font_color(color))
+        ws.cell(
+            row=row,
+            column=COUNT_COL,
+            value=(
+                f'=COUNTIF({first_day_letter}{row}:{last_day_letter}{row},'
+                f'"{marker_escaped}")'
+            ),
+        )
 
     ws.cell(row=total_row, column=NAME_COL, value="Total on holiday")
+    ws.cell(row=total_row, column=COUNT_COL, value="")
 
     for c in day_columns:
         col_letter = get_column_letter(c)
@@ -257,6 +278,7 @@ def build_sheet(
     left = Alignment(horizontal="left", vertical="center")
 
     ws.column_dimensions[get_column_letter(NAME_COL)].width = 18
+    ws.column_dimensions[get_column_letter(COUNT_COL)].width = 10
     for c in day_columns:
         ws.column_dimensions[get_column_letter(c)].width = 11
 
@@ -265,6 +287,12 @@ def build_sheet(
     name_header.alignment = center
     name_header.fill = HEADER_FILL
     name_header.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+    count_header = ws.cell(row=WEEK_ROW, column=COUNT_COL)
+    count_header.font = header_font
+    count_header.alignment = center
+    count_header.fill = HEADER_FILL
+    count_header.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
     for r in (WEEK_ROW, DAY_ROW):
         for c in range(FIRST_DAY_COL, last_day_col + 1):
@@ -279,6 +307,10 @@ def build_sheet(
         ws.cell(row=r, column=NAME_COL).border = Border(
             left=THIN, right=THIN, top=THIN, bottom=THIN
         )
+        count_cell = ws.cell(row=r, column=COUNT_COL)
+        count_cell.alignment = center
+        count_cell.font = Font(bold=True)
+        count_cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
         for c in day_columns:
             cell = ws.cell(row=r, column=c)
             cell.alignment = center
@@ -289,6 +321,10 @@ def build_sheet(
     total_name.alignment = left
     total_name.fill = TOTAL_FILL
     total_name.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+    total_count = ws.cell(row=total_row, column=COUNT_COL)
+    total_count.fill = TOTAL_FILL
+    total_count.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
     for c in day_columns:
         cell = ws.cell(row=total_row, column=c)
@@ -306,6 +342,22 @@ def build_sheet(
         last = get_column_letter(day_columns[-1])
         anchor_col = get_column_letter(day_columns[0])
         marker = holiday_marker.replace('"', '""')
+        count_col_letter = get_column_letter(COUNT_COL)
+        count_range = (
+            f"{count_col_letter}{FIRST_DATA_ROW}:{count_col_letter}{last_engineer_row}"
+        )
+        ws.conditional_formatting.add(
+            count_range,
+            ColorScaleRule(
+                start_type="min",
+                start_color="F8696B",
+                mid_type="percentile",
+                mid_value=50,
+                mid_color="FFEB84",
+                end_type="max",
+                end_color="63BE7B",
+            ),
+        )
 
         for i, color in enumerate(engineer_colors):
             row = FIRST_DATA_ROW + i

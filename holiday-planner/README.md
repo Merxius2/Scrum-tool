@@ -24,6 +24,7 @@ Generate an Excel workbook for planning team time off. Each team member gets a r
 
 - Enter **`H`** (or your configured marker) in a cell when someone is on holiday; leave the cell blank when they are working.
 - Each engineer gets a **random colour** when the workbook is generated. Column A uses that colour as the row label background; holiday cells (`H`) use the same colour.
+- Column **B** shows **total days off** planned on that sheet (formula); colour scales **red → green** from the lowest to the highest count in the team (most days off = green).
 - **Week boundaries** use a stronger vertical line on the first weekday column of each ISO week.
 - The **Total on holiday** row uses formulas to count markers per day.
 - Conditional formatting on that row: **0** = green, **1–2** = yellow, **3+** = red (more than two engineers away).

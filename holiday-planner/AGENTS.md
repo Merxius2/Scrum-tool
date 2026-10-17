@@ -15,6 +15,7 @@ The tool should:
 - Highlight risk on the total row: **green** when nobody is away, **yellow** for 1–2, **red** when more than two are away.
 - Assign each engineer a **distinct colour** on generate; use it in column A and for **`H`** cells via conditional formatting.
 - Make **week boundaries** easy to see (stronger border on the first weekday of each ISO week).
+- Column **B**: per-engineer **total days off** on the sheet (COUNTIF row), colour scale red (min) → green (max) within the team.
 
 Generated output is **`Team-Holiday-Planner.xlsx`** (gitignored; recreate with the script). User-facing usage lives in **`README.md`**.
 
