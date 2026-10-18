@@ -10,14 +10,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 DEFAULT_CONFIG_NAME = "sprint_planner.config.json"
 INSTRUCTIONS_SHEET_NAME = "Instructions"
+PRODUCT_BACKLOG_SHEET = "Product backlog"
+VELOCITY_SHEET = "Velocity"
 
 THIN = Side(style="thin", color="CCCCCC")
 HEADER_FILL = PatternFill("solid", fgColor="E8EEF4")
@@ -111,8 +113,16 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError('"team_members" must be a non-empty list of names.')
 
     sprints = data.get("sprints")
-    if not sprints or not isinstance(sprints, list):
-        raise ValueError('"sprints" must be a non-empty list of sprint definitions.')
+    if sprints is None:
+        sprints = []
+    if not isinstance(sprints, list):
+        raise ValueError('"sprints" must be a list of sprint definitions.')
+
+    add_sprints = data.get("add_sprints")
+    if add_sprints is None:
+        add_sprints = []
+    if not isinstance(add_sprints, list):
+        raise ValueError('"add_sprints" must be a list of sprint definitions.')
 
     return {
         "output_file": data.get("output_file", "Sprint-Planning.xlsx"),
@@ -134,7 +144,92 @@ def load_config(path: Path) -> dict[str, Any]:
             data.get("prefill_velocity_from_rolling_average", True)
         ),
         "sprints": sprints,
+        "add_sprints": add_sprints,
     }
+
+
+def system_sheet_names() -> set[str]:
+    return {PRODUCT_BACKLOG_SHEET, VELOCITY_SHEET, INSTRUCTIONS_SHEET_NAME}
+
+
+def ordered_sprint_sheet_names(wb) -> list[str]:
+    return [name for name in wb.sheetnames if name not in system_sheet_names()]
+
+
+def sprint_meta_from_sheet_name(sheet_name: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Build Velocity cross-references for an existing sprint tab (fixed layout)."""
+    layout = sprint_sheet_layout(len(cfg["team_members"]), cfg["max_backlog_rows_per_sprint"])
+    tr = layout["team_total_row"]
+    sf = layout["summary_first_row"]
+    vel_col = get_column_letter(KPI_VALUE_COL)
+    quoted = sheet_name.replace("'", "''")
+    return {
+        "sheet_name": sheet_name,
+        "goal_cell": f"'{quoted}'!$B${META_GOAL_ROW}",
+        "start_cell": f"'{quoted}'!$B${META_START_ROW}",
+        "end_cell": f"'{quoted}'!$B${META_END_ROW}",
+        "committed_cell": f"'{quoted}'!$B${sf}",
+        "completed_cell": f"'{quoted}'!$B${sf + 1}",
+        "velocity_cell": f"'{quoted}'!$B${sf + 1}",
+        "carryover_cell": f"'{quoted}'!$B${sf + 3}",
+        "completion_cell": f"'{quoted}'!$B${sf + 4}",
+        "capacity_cell": f"'{quoted}'!$D${tr}",
+        "load_cell": (
+            f"=IF('{quoted}'!$D${tr}=0,\"\","
+            f"'{quoted}'!${vel_col}${KPI_COMMITTED_ROW}/'{quoted}'!$D${tr})"
+        ),
+        "working_days_cell": f"'{quoted}'!$B${META_WORKING_DAYS_ROW}",
+    }
+
+
+def lock_all_cells(ws) -> None:
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.__class__.__name__ == "MergedCell":
+                continue
+            cell.protection = Protection(locked=True)
+
+
+def unlock_cell(ws, row: int, col: int) -> None:
+    ws.cell(row=row, column=col).protection = Protection(locked=False)
+
+
+def enable_sheet_protection(ws) -> None:
+    ws.protection.sheet = True
+    ws.protection.enable()
+
+
+def protect_sprint_worksheet(
+    ws,
+    layout: dict[str, int],
+    bf: int,
+    bl: int,
+) -> None:
+    lock_all_cells(ws)
+    unlock_cell(ws, META_TITLE_ROW, 2)
+    unlock_cell(ws, META_START_ROW, 2)
+    unlock_cell(ws, META_GOAL_ROW, 2)
+    unlock_cell(ws, KPI_PLANNING_VEL_ROW, KPI_VALUE_COL)
+    for row in range(CAPACITY_FIRST_DATA_ROW, layout["capacity_last"] + 1):
+        unlock_cell(ws, row, COL_PTO)
+        unlock_cell(ws, row, COL_FTE)
+    for row in range(bf, bl + 1):
+        for col in range(BACKLOG_ID, BACKLOG_NOTES + 1):
+            unlock_cell(ws, row, col)
+    enable_sheet_protection(ws)
+
+
+def protect_product_backlog_worksheet(ws, first_row: int, last_row: int) -> None:
+    lock_all_cells(ws)
+    for row in range(first_row, last_row + 1):
+        for col in range(1, 9):
+            unlock_cell(ws, row, col)
+    enable_sheet_protection(ws)
+
+
+def protect_readonly_worksheet(ws) -> None:
+    lock_all_cells(ws)
+    enable_sheet_protection(ws)
 
 
 def list_formula(values: list[str]) -> str:
@@ -167,15 +262,18 @@ def velocity_rolling_average_row(sprint_count: int) -> int:
 
 
 def initial_planning_velocity(
-    sprint_index: int, sprint: dict[str, Any], cfg: dict[str, Any]
+    sprint_index: int,
+    sprint: dict[str, Any],
+    cfg: dict[str, Any],
+    total_sprint_count: int,
 ) -> float | str | None:
     if "planning_velocity" in sprint:
         return float(sprint["planning_velocity"])
     if sprint_index == 0:
         default = cfg.get("default_planning_velocity")
         return default if default is not None else None
-    if cfg.get("prefill_velocity_from_rolling_average", True):
-        row = velocity_rolling_average_row(len(cfg["sprints"]))
+    if cfg.get("prefill_velocity_from_rolling_average", True) and total_sprint_count > 0:
+        row = velocity_rolling_average_row(total_sprint_count)
         return f"=Velocity!$B${row}"
     default = cfg.get("default_planning_velocity")
     return default if default is not None else None
@@ -240,6 +338,7 @@ def build_sprint_overview_kpis(
     cfg: dict[str, Any],
     sprint_index: int,
     previous_sprint_meta: dict[str, Any] | None,
+    total_sprint_count: int,
 ):
     vel_col = get_column_letter(KPI_VALUE_COL)
     overview_fill = PatternFill("solid", fgColor="F2F7FB")
@@ -260,7 +359,9 @@ def build_sprint_overview_kpis(
         lbl.font = Font(bold=True)
         lbl.fill = overview_fill
 
-    vel_initial = initial_planning_velocity(sprint_index, sprint, cfg)
+    vel_initial = initial_planning_velocity(
+        sprint_index, sprint, cfg, total_sprint_count
+    )
     vel_cell = ws.cell(
         row=KPI_PLANNING_VEL_ROW,
         column=KPI_VALUE_COL,
@@ -316,6 +417,7 @@ def build_sprint_sheet(
     cfg: dict[str, Any],
     sprint_index: int = 0,
     previous_sprint_meta: dict[str, Any] | None = None,
+    total_sprint_count: int | None = None,
 ) -> dict[str, Any]:
     team = cfg["team_members"]
     max_rows = cfg["max_backlog_rows_per_sprint"]
@@ -325,15 +427,21 @@ def build_sprint_sheet(
     ws.title = sheet_name
 
     title = sprint.get("title") or sheet_name
-    start = parse_date(str(sprint["start"]))
     working_days = resolve_sprint_length_working_days(sprint, cfg)
     goal = sprint.get("goal", "")
+    if total_sprint_count is None:
+        total_sprint_count = sprint_index + 1
 
     ws.cell(row=META_TITLE_ROW, column=1, value="Sprint")
     ws.cell(row=META_TITLE_ROW, column=2, value=title)
     ws.cell(row=META_START_ROW, column=1, value="Start")
-    ws.cell(row=META_START_ROW, column=2, value=start)
-    ws.cell(row=META_START_ROW, column=2).number_format = "yyyy-mm-dd"
+    start_cell = ws.cell(row=META_START_ROW, column=2)
+    start_raw = sprint.get("start")
+    if start_raw:
+        start_cell.value = parse_date(str(start_raw))
+    else:
+        start_cell.value = None
+    start_cell.number_format = "yyyy-mm-dd"
     ws.cell(row=META_END_ROW, column=1, value="End (auto)")
     end_cell = ws.cell(row=META_END_ROW, column=2, value=sprint_end_formula(working_days))
     end_cell.number_format = "yyyy-mm-dd"
@@ -426,7 +534,15 @@ def build_sprint_sheet(
         cell.fill = SECTION_FILL
 
     build_sprint_overview_kpis(
-        ws, tr, bf, bl, sprint, cfg, sprint_index, previous_sprint_meta
+        ws,
+        tr,
+        bf,
+        bl,
+        sprint,
+        cfg,
+        sprint_index,
+        previous_sprint_meta,
+        total_sprint_count,
     )
 
     bt = layout["backlog_title_row"]
@@ -576,25 +692,32 @@ def build_sprint_sheet(
 
     ws.freeze_panes = ws.cell(row=bf, column=BACKLOG_TITLE).coordinate
 
-    start_cell = f"'{sheet_name}'!$B${META_START_ROW}"
-    end_cell_ref = f"'{sheet_name}'!$B${META_END_ROW}"
+    protect_sprint_worksheet(ws, layout, bf, bl)
+
+    quoted = sheet_name.replace("'", "''")
+    start_cell = f"'{quoted}'!$B${META_START_ROW}"
+    end_cell_ref = f"'{quoted}'!$B${META_END_ROW}"
     vel_col = get_column_letter(KPI_VALUE_COL)
 
     return {
         "sheet_name": sheet_name,
         "goal": goal,
+        "goal_cell": f"'{quoted}'!$B${META_GOAL_ROW}",
         "start_cell": start_cell,
         "end_cell": end_cell_ref,
-        "committed_cell": f"'{sheet_name}'!$B${layout['summary_first_row']}",
-        "completed_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 1}",
-        "velocity_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 1}",
-        "carryover_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 3}",
-        "completion_cell": f"'{sheet_name}'!$B${layout['summary_first_row'] + 4}",
-        "capacity_cell": f"'{sheet_name}'!$D${tr}",
-        "load_cell": f"='{sheet_name}'!${vel_col}${KPI_COMMITTED_ROW}/'{sheet_name}'!$D${tr}",
-        "suggested_limit_cell": f"'{sheet_name}'!${vel_col}${KPI_SUGGESTED_LIMIT_ROW}",
-        "planning_velocity_cell": f"'{sheet_name}'!${vel_col}${KPI_PLANNING_VEL_ROW}",
-        "working_days_cell": f"'{sheet_name}'!$B${META_WORKING_DAYS_ROW}",
+        "committed_cell": f"'{quoted}'!$B${layout['summary_first_row']}",
+        "completed_cell": f"'{quoted}'!$B${layout['summary_first_row'] + 1}",
+        "velocity_cell": f"'{quoted}'!$B${layout['summary_first_row'] + 1}",
+        "carryover_cell": f"'{quoted}'!$B${layout['summary_first_row'] + 3}",
+        "completion_cell": f"'{quoted}'!$B${layout['summary_first_row'] + 4}",
+        "capacity_cell": f"'{quoted}'!$D${tr}",
+        "load_cell": (
+            f"=IF('{quoted}'!$D${tr}=0,\"\","
+            f"'{quoted}'!${vel_col}${KPI_COMMITTED_ROW}/'{quoted}'!$D${tr})"
+        ),
+        "suggested_limit_cell": f"'{quoted}'!${vel_col}${KPI_SUGGESTED_LIMIT_ROW}",
+        "planning_velocity_cell": f"'{quoted}'!${vel_col}${KPI_PLANNING_VEL_ROW}",
+        "working_days_cell": f"'{quoted}'!$B${META_WORKING_DAYS_ROW}",
     }
 
 
@@ -606,7 +729,7 @@ def build_velocity_sheet(ws, sprint_meta: list[dict[str, Any]], cfg: dict[str, A
     ws.cell(
         row=2,
         column=1,
-        value="Completed metrics pull from sprint tabs. Enter Planning velocity on each sprint for commit limits.",
+        value="One row per sprint tab. Committed and completed SP are formulas linked to each sprint — do not type here.",
     )
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=10)
 
@@ -637,7 +760,7 @@ def build_velocity_sheet(ws, sprint_meta: list[dict[str, Any]], cfg: dict[str, A
         ws.cell(row=row, column=3, value=f"={meta['end_cell']}")
         ws.cell(row=row, column=3).number_format = "yyyy-mm-dd"
         ws.cell(row=row, column=4, value=f"={meta['working_days_cell']}")
-        ws.cell(row=row, column=5, value=meta["goal"])
+        ws.cell(row=row, column=5, value=f"={meta['goal_cell']}")
         ws.cell(row=row, column=6, value=f"={meta['committed_cell']}")
         ws.cell(row=row, column=7, value=f"={meta['completed_cell']}")
         ws.cell(row=row, column=8, value=f"={meta['velocity_cell']}")
@@ -695,8 +818,34 @@ def build_velocity_sheet(ws, sprint_meta: list[dict[str, Any]], cfg: dict[str, A
     for col in "FGHIJK":
         ws.column_dimensions[col].width = 14
 
+    protect_readonly_worksheet(ws)
 
-def build_product_backlog_sheet(ws, cfg: dict[str, Any]):
+
+def rebuild_velocity_tab(wb, sprint_meta: list[dict[str, Any]], cfg: dict[str, Any]) -> None:
+    if VELOCITY_SHEET in wb.sheetnames:
+        idx = wb.sheetnames.index(VELOCITY_SHEET)
+        del wb[VELOCITY_SHEET]
+    else:
+        idx = 1
+    build_velocity_sheet(wb.create_sheet(VELOCITY_SHEET, idx), sprint_meta, cfg)
+
+
+def update_product_backlog_sprint_list(ws, sprint_names: list[str]) -> None:
+    """Refresh Target sprint dropdown to include all sprint tabs."""
+    header_row = 4
+    first = header_row + 1
+    rows = ws.max_row
+    if rows < first:
+        return
+    target_list = list_formula([""] + sprint_names)
+    dv_target = DataValidation(type="list", formula1=target_list, allow_blank=True)
+    dv_target.add(f"F{first}:F{rows}")
+    ws.add_data_validation(dv_target)
+
+
+def build_product_backlog_sheet(
+    ws, cfg: dict[str, Any], sprint_names: list[str] | None = None
+):
     ws.title = "Product backlog"
     rows = cfg["product_backlog_rows"]
     team = cfg["team_members"]
@@ -727,7 +876,8 @@ def build_product_backlog_sheet(ws, cfg: dict[str, Any]):
 
     first = header_row + 1
     last = first + rows - 1
-    sprint_names = [str(s.get("sheet_name", "")) for s in cfg["sprints"]]
+    if sprint_names is None:
+        sprint_names = [str(s.get("sheet_name", "")) for s in cfg["sprints"]]
     target_list = list_formula([""] + sprint_names)
 
     for r in range(first, last + 1):
@@ -761,6 +911,7 @@ def build_product_backlog_sheet(ws, cfg: dict[str, Any]):
     ws.column_dimensions["G"].width = 28
     ws.column_dimensions["H"].width = 8
     ws.freeze_panes = ws.cell(row=first, column=2).coordinate
+    protect_product_backlog_worksheet(ws, first, last)
 
 
 def _write_instructions_block(
@@ -861,8 +1012,11 @@ def build_instructions_sheet(ws):
         "Regenerate vs edit in Excel",
         [
             "• Edit names, dates, backlog, and statuses directly in Excel day to day.",
-            "• Run python3 generate_sprint_planner.py after changing sprint_planner.config.json "
-            "(team list, new sprint tabs, defaults). This overwrites the xlsx — export first if needed.",
+            "• Add sprint tabs: put entries in add_sprints in sprint_planner.config.json, then run "
+            "python3 generate_sprint_planner.py (existing sprint data is kept). Use --force only to "
+            "recreate the whole workbook from scratch.",
+            "• Formula cells are locked; editable fields (dates, capacity inputs, backlog, planning velocity) "
+            "stay unlocked. Unprotect a sheet in Excel if you must change structure.",
         ],
     )
 
@@ -871,39 +1025,123 @@ def build_instructions_sheet(ws):
     ws.column_dimensions["C"].width = 18
     ws.column_dimensions["D"].width = 18
     ws.sheet_view.showGridLines = True
+    protect_readonly_worksheet(ws)
 
 
-def generate(config_path: Path) -> Path:
-    cfg = load_config(config_path)
-    base_dir = config_path.resolve().parent
+def validate_sprint_entry(entry: dict[str, Any]) -> None:
+    if "sheet_name" not in entry:
+        raise ValueError('Each sprint entry needs a "sheet_name".')
 
+
+def create_fresh_workbook(cfg: dict[str, Any]) -> Workbook:
     wb = Workbook()
     wb.remove(wb.active)
-
-    build_product_backlog_sheet(wb.create_sheet(), cfg)
+    build_product_backlog_sheet(wb.create_sheet(), cfg, sprint_names=[])
 
     sprint_meta: list[dict[str, Any]] = []
     previous_meta: dict[str, Any] | None = None
+    total = len(cfg["sprints"])
     for i, entry in enumerate(cfg["sprints"]):
         if not isinstance(entry, dict):
             raise ValueError('Each "sprints" item must be an object.')
-        for key in ("sheet_name", "start"):
-            if key not in entry:
-                raise ValueError(f'Sprint entry missing "{key}".')
+        validate_sprint_entry(entry)
         ws = wb.create_sheet()
         meta = build_sprint_sheet(
-            ws, entry, cfg, sprint_index=i, previous_sprint_meta=previous_meta
+            ws,
+            entry,
+            cfg,
+            sprint_index=i,
+            previous_sprint_meta=previous_meta,
+            total_sprint_count=total,
         )
         sprint_meta.append(meta)
         previous_meta = meta
 
-    build_velocity_sheet(wb.create_sheet(), sprint_meta, cfg)
-    if sprint_meta:
-        wb.move_sheet(wb["Velocity"], offset=-len(sprint_meta))
+    if PRODUCT_BACKLOG_SHEET in wb.sheetnames:
+        update_product_backlog_sprint_list(
+            wb[PRODUCT_BACKLOG_SHEET],
+            [m["sheet_name"] for m in sprint_meta],
+        )
 
+    rebuild_velocity_tab(wb, sprint_meta, cfg)
     build_instructions_sheet(wb.create_sheet())
+    return wb
 
+
+def add_sprints_to_workbook(wb, cfg: dict[str, Any], entries: list[dict[str, Any]]) -> int:
+    existing = set(ordered_sprint_sheet_names(wb))
+    added = 0
+    sprint_meta = [sprint_meta_from_sheet_name(n, cfg) for n in ordered_sprint_sheet_names(wb)]
+    previous_meta = sprint_meta[-1] if sprint_meta else None
+    total_after = len(existing) + len(
+        [e for e in entries if str(e.get("sheet_name", ""))[:31] not in existing]
+    )
+
+    instr_idx = (
+        wb.sheetnames.index(INSTRUCTIONS_SHEET_NAME)
+        if INSTRUCTIONS_SHEET_NAME in wb.sheetnames
+        else len(wb.sheetnames)
+    )
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError('Each sprint entry must be an object.')
+        validate_sprint_entry(entry)
+        sheet_name = str(entry["sheet_name"])[:31]
+        if sheet_name in existing:
+            continue
+        ws = wb.create_sheet(sheet_name, instr_idx)
+        instr_idx += 1
+        sprint_index = len(sprint_meta)
+        meta = build_sprint_sheet(
+            ws,
+            entry,
+            cfg,
+            sprint_index=sprint_index,
+            previous_sprint_meta=previous_meta,
+            total_sprint_count=total_after,
+        )
+        sprint_meta.append(meta)
+        previous_meta = meta
+        existing.add(sheet_name)
+        added += 1
+
+    if PRODUCT_BACKLOG_SHEET in wb.sheetnames:
+        update_product_backlog_sprint_list(
+            wb[PRODUCT_BACKLOG_SHEET], ordered_sprint_sheet_names(wb)
+        )
+
+    rebuild_velocity_tab(wb, sprint_meta, cfg)
+    return added
+
+
+def generate(config_path: Path, force: bool = False) -> Path:
+    cfg = load_config(config_path)
+    base_dir = config_path.resolve().parent
     out = base_dir / cfg["output_file"]
+
+    if out.is_file() and not force:
+        return update_workbook(config_path, cfg, out)
+
+    wb = create_fresh_workbook(cfg)
+    wb.save(out)
+    return out
+
+
+def update_workbook(config_path: Path, cfg: dict[str, Any], out: Path) -> Path:
+    wb = load_workbook(out)
+    entries = cfg.get("add_sprints") or []
+    if not entries:
+        sprint_meta = [
+            sprint_meta_from_sheet_name(n, cfg) for n in ordered_sprint_sheet_names(wb)
+        ]
+        rebuild_velocity_tab(wb, sprint_meta, cfg)
+        wb.save(out)
+        return out
+
+    added = add_sprints_to_workbook(wb, cfg, entries)
+    if added == 0:
+        print("No new sprint tabs added (sheet names already exist).", file=sys.stderr)
     wb.save(out)
     return out
 
@@ -919,6 +1157,11 @@ def main():
         default=None,
         help=f"Path to JSON config (default: {DEFAULT_CONFIG_NAME} next to this script)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Recreate the entire workbook (default: update existing file, add sprints from add_sprints)",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -928,12 +1171,12 @@ def main():
         sys.exit(1)
 
     try:
-        out = generate(config_path)
+        out = generate(config_path, force=args.force)
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Created: {out}")
+    print(f"Saved: {out}")
 
 
 if __name__ == "__main__":
