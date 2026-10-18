@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 holiday-planner/Team-Holiday-Planner.xlsx
+holiday-planner/*.backup-*.xlsx
 sprint-planning/Sprint-Planning.xlsx
 sprint-planning/*.backup-*.xlsx
 sprint-planning/~$*.xlsx

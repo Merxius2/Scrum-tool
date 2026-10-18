@@ -28,6 +28,7 @@ Generated output is **`Team-Holiday-Planner.xlsx`** (gitignored; recreate with t
 - **Styling**: random pastel engineer colours (or seeded), FormulaRule fill when cell equals marker, ColorScaleRule on total row, medium left border on week-start columns.
 - **`requirements.txt`** — `openpyxl>=3.1.0`.
 - **`README.md`** — setup, config reference, CLI (`-c` for alternate config path).
+- **CLI**: `generate` (default), `--force`, **`addyear YEAR …`** (append calendar year sheets; backup before overwrite). Header dates **`dd-mm-yyyy`**. **Sheet protection**: lock formula/header cells; unlock names and day markers.
 - Repo home: **`Documents/Git/Scrum-tool/holiday-planner/`** inside [Scrum-tool](https://github.com/Merxius2/Scrum-tool.git); root README links here.
 
 ## Key files (do not break without reason)

@@ -7,18 +7,20 @@ import argparse
 import colorsys
 import json
 import random
+import shutil
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from openpyxl import Workbook
-from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl import Workbook, load_workbook
+from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 DEFAULT_CONFIG_NAME = "holiday_planner.config.json"
+DATE_DISPLAY_FORMAT = "%d-%m-%Y"
 
 WEEK_ROW = 1
 DAY_ROW = 2
@@ -65,6 +67,73 @@ def contrasting_font_color(hex_rgb: str) -> str:
 def cell_border(week_start_columns: set[int], column: int) -> Border:
     left = WEEK_BORDER if column in week_start_columns else THIN
     return Border(left=left, right=THIN, top=THIN, bottom=THIN)
+
+
+def lock_all_cells(ws) -> None:
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.__class__.__name__ == "MergedCell":
+                continue
+            cell.protection = Protection(locked=True)
+
+
+def unlock_cell(ws, row: int, col: int) -> None:
+    ws.cell(row=row, column=col).protection = Protection(locked=False)
+
+
+def enable_sheet_protection(ws) -> None:
+    ws.protection.sheet = True
+    ws.protection.enable()
+
+
+def protect_holiday_sheet(
+    ws,
+    day_columns: list[int],
+    last_engineer_row: int,
+) -> None:
+    """Lock formulas and headers; unlock engineer names and holiday day cells."""
+    lock_all_cells(ws)
+    for row in range(FIRST_DATA_ROW, last_engineer_row + 1):
+        unlock_cell(ws, row, NAME_COL)
+        for col in day_columns:
+            unlock_cell(ws, row, col)
+    enable_sheet_protection(ws)
+
+
+def backup_workbook_if_exists(path: Path) -> Path | None:
+    if not path.is_file():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}")
+    shutil.copy2(path, backup_path)
+    return backup_path
+
+
+def engineer_colors_from_workbook(wb, team_count: int) -> list[str] | None:
+    """Reuse row label colours from an existing sheet when appending a year."""
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        colors: list[str] = []
+        for i in range(team_count):
+            row = FIRST_DATA_ROW + i
+            cell = ws.cell(row=row, column=NAME_COL)
+            fg = cell.fill.fgColor.rgb if cell.fill and cell.fill.fgColor else None
+            if not fg or fg in ("00000000", "0"):
+                colors = []
+                break
+            hex_rgb = fg[2:] if len(fg) == 8 else fg
+            colors.append(hex_rgb.upper())
+        if len(colors) == team_count:
+            return colors
+    return None
+
+
+def resolve_workbook_path(cfg: dict[str, Any], base_dir: Path, workbook: Path | None) -> Path:
+    if workbook is None:
+        return base_dir / cfg["output_file"]
+    if workbook.is_absolute():
+        return workbook
+    return base_dir / workbook
 
 
 def iter_weekdays(start: date, end: date):
@@ -200,11 +269,11 @@ def build_sheet(
         week_start_col = col
         week_start_columns.add(week_start_col)
         for d in week_days:
-            ws.cell(row=DAY_ROW, column=col, value=d.strftime("%a %d-%m"))
+            ws.cell(row=DAY_ROW, column=col, value=d.strftime(f"%a {DATE_DISPLAY_FORMAT}"))
             day_columns.append(col)
             col += 1
         week_end_col = col - 1
-        week_label = f"W{iso_week:02d} · w/c {week_days[0].strftime('%d-%m-%Y')}"
+        week_label = f"W{iso_week:02d} · w/c {week_days[0].strftime(DATE_DISPLAY_FORMAT)}"
         ws.cell(row=WEEK_ROW, column=week_start_col, value=week_label)
         if week_end_col > week_start_col:
             ws.merge_cells(
@@ -259,9 +328,10 @@ def build_sheet(
             end_column=min(last_day_col, NAME_COL + 8),
         )
 
+    marker_escaped_dv = holiday_marker.replace('"', '""')
     dv = DataValidation(
         type="list",
-        formula1=f'"{holiday_marker},"',
+        formula1=f'"{marker_escaped_dv}"',
         allow_blank=True,
         showDropDown=False,
     )
@@ -340,8 +410,6 @@ def build_sheet(
     if day_columns:
         first = get_column_letter(day_columns[0])
         last = get_column_letter(day_columns[-1])
-        anchor_col = get_column_letter(day_columns[0])
-        marker = holiday_marker.replace('"', '""')
         count_col_letter = get_column_letter(COUNT_COL)
         count_range = (
             f"{count_col_letter}{FIRST_DATA_ROW}:{count_col_letter}{last_engineer_row}"
@@ -359,15 +427,17 @@ def build_sheet(
             ),
         )
 
+        marker_cf = holiday_marker.replace('"', '""')
         for i, color in enumerate(engineer_colors):
             row = FIRST_DATA_ROW + i
             row_range = f"{first}{row}:{last}{row}"
+            fill = PatternFill("solid", fgColor=color, bgColor=color)
             ws.conditional_formatting.add(
                 row_range,
-                FormulaRule(
-                    formula=[f'{anchor_col}{row}="{marker}"'],
-                    fill=PatternFill("solid", fgColor=color),
-                    stopIfTrue=True,
+                CellIsRule(
+                    operator="equal",
+                    formula=[f'"{marker_cf}"'],
+                    fill=fill,
                 ),
             )
 
@@ -387,30 +457,35 @@ def build_sheet(
             ),
         )
 
+    protect_holiday_sheet(ws, day_columns, last_engineer_row)
+
     return ws
 
 
-def generate(config_path: Path, today: date | None = None) -> Path:
-    cfg = load_config(config_path)
-    today = today or date.today()
-    base_dir = config_path.resolve().parent
+def normalize_year_entry(entry: Any) -> dict[str, Any]:
+    if isinstance(entry, dict):
+        return entry
+    if isinstance(entry, int):
+        return {"sheet_name": str(entry), "year": entry}
+    raise ValueError('Each "years" item must be an object or a year number.')
 
+
+def engineer_colors_for_run(cfg: dict[str, Any], wb=None) -> list[str]:
+    team_count = len(cfg["team_members"])
+    if wb is not None:
+        existing = engineer_colors_from_workbook(wb, team_count)
+        if existing:
+            return existing
+    rng = random.Random(cfg.get("color_seed"))
+    return assign_engineer_colors(team_count, rng)
+
+
+def create_fresh_workbook(cfg: dict[str, Any], today: date) -> Workbook:
     wb = Workbook()
     wb.remove(wb.active)
-
-    color_seed = cfg.get("color_seed")
-    rng = random.Random(color_seed)
-    engineer_colors = assign_engineer_colors(len(cfg["team_members"]), rng)
-
+    engineer_colors = engineer_colors_for_run(cfg)
     for entry in cfg["years"]:
-        if not isinstance(entry, dict):
-            if isinstance(entry, int):
-                entry = {"sheet_name": str(entry), "year": entry}
-            else:
-                raise ValueError(
-                    'Each "years" item must be an object or a year number.'
-                )
-        sheet_name, start, end = resolve_period(entry, today)
+        sheet_name, start, end = resolve_period(normalize_year_entry(entry), today)
         build_sheet(
             wb.create_sheet(),
             sheet_name,
@@ -420,10 +495,73 @@ def generate(config_path: Path, today: date | None = None) -> Path:
             cfg["holiday_marker"],
             engineer_colors,
         )
+    return wb
 
+
+def generate(config_path: Path, force: bool = False, today: date | None = None) -> tuple[Path, Path | None]:
+    cfg = load_config(config_path)
+    today = today or date.today()
+    base_dir = config_path.resolve().parent
     out = base_dir / cfg["output_file"]
+
+    if out.is_file() and not force:
+        raise ValueError(
+            f"{out.name} already exists. Use --force to recreate, or "
+            f"'addyear 2028 {out.name}' to append a year sheet."
+        )
+
+    backup = backup_workbook_if_exists(out) if out.is_file() else None
+    wb = create_fresh_workbook(cfg, today)
     wb.save(out)
-    return out
+    return out, backup
+
+
+def addyear(
+    config_path: Path,
+    years: list[int],
+    workbook: Path | None,
+    today: date | None = None,
+) -> tuple[Path, Path | None, int]:
+    if not years:
+        raise ValueError("addyear requires at least one calendar year (e.g. addyear 2028).")
+    cfg = load_config(config_path)
+    today = today or date.today()
+    base_dir = config_path.resolve().parent
+    out = resolve_workbook_path(cfg, base_dir, workbook)
+
+    if not out.is_file():
+        raise ValueError(f"Workbook not found: {out}. Run generate first (with or without --force).")
+
+    backup = backup_workbook_if_exists(out)
+    wb = load_workbook(out)
+    engineer_colors = engineer_colors_for_run(cfg, wb)
+    existing = set(wb.sheetnames)
+    added = 0
+
+    for year in years:
+        entry = {"sheet_name": str(year), "year": year}
+        sheet_name = str(year)[:31]
+        if sheet_name in existing:
+            continue
+        sheet_name, start, end = resolve_period(entry, today)
+        build_sheet(
+            wb.create_sheet(sheet_name),
+            sheet_name,
+            start,
+            end,
+            cfg["team_members"],
+            cfg["holiday_marker"],
+            engineer_colors,
+        )
+        existing.add(sheet_name)
+        added += 1
+
+    if added == 0:
+        print("No new year sheets added (sheet names already exist).", file=sys.stderr)
+    else:
+        wb.save(out)
+
+    return out, backup, added
 
 
 def main():
@@ -435,6 +573,23 @@ def main():
         default=None,
         help=f"Path to JSON config (default: {DEFAULT_CONFIG_NAME} next to this script)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Recreate the entire workbook from config (backs up existing file first)",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="generate",
+        choices=("generate", "addyear"),
+        help="generate (default): create workbook; addyear: append calendar year sheet(s)",
+    )
+    parser.add_argument(
+        "year_args",
+        nargs="*",
+        help="With addyear: one or more years (e.g. 2028), optional path to .xlsx last",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -444,12 +599,35 @@ def main():
         sys.exit(1)
 
     try:
-        out = generate(config_path)
+        backup: Path | None = None
+        if args.command == "addyear":
+            years: list[int] = []
+            workbook: Path | None = None
+            for raw in args.year_args:
+                if raw.lower().endswith(".xlsx"):
+                    workbook = Path(raw)
+                    continue
+                years.append(int(raw))
+            if not years:
+                print(
+                    "Usage: generate_holiday_planner.py addyear YEAR [YEAR ...] [WORKBOOK.xlsx]",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            out, backup, added = addyear(config_path, years, workbook)
+            if added:
+                print(f"Added {added} year sheet(s).", file=sys.stderr)
+        else:
+            if args.year_args:
+                print("Tip: use 'addyear 2028' to append a year to an existing workbook.", file=sys.stderr)
+            out, backup = generate(config_path, force=args.force)
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Created: {out}")
+    if backup is not None:
+        print(f"Backup: {backup.resolve()}", file=sys.stderr)
+    print(f"Saved: {out.resolve()}")
 
 
 if __name__ == "__main__":

@@ -15,10 +15,12 @@ Generate an Excel workbook for planning team time off. Each team member gets a r
 3. Generate the workbook:
 
    ```bash
-   python3 generate_holiday_planner.py
+   python3 generate_holiday_planner.py --force
    ```
 
 4. Open `Team-Holiday-Planner.xlsx` (or the filename set in config).
+
+Dates in headers use **`dd-mm-yyyy`** (e.g. `Mon 06-01-2027`). Before **`--force`** or **`addyear`** overwrites the file, the script saves a timestamped backup next to it (e.g. `Team-Holiday-Planner.backup-20261018-120000.xlsx`).
 
 ## Using the spreadsheet
 
@@ -100,12 +102,20 @@ Alternative keys `start` / `end` / `to` are accepted instead of `from` / `throug
 
 ## Command-line options
 
+| Command | Description |
+| --- | --- |
+| `python3 generate_holiday_planner.py` | Create workbook from config. Fails if the file already exists. |
+| `python3 generate_holiday_planner.py --force` | Recreate the whole workbook (backup first if file exists). |
+| `python3 generate_holiday_planner.py addyear 2028` | Append a **2028** sheet; keeps existing sheets and holiday marks. |
+| `python3 generate_holiday_planner.py addyear 2028 2029 Team-Holiday-Planner.xlsx` | Append multiple years to a specific file. |
+
 ```bash
-python3 generate_holiday_planner.py
 python3 generate_holiday_planner.py -c /path/to/other-config.json
 ```
 
 The default config path is `holiday_planner.config.json` in the same folder as the script.
+
+**Sheet protection:** formula cells (day counts, totals) are locked; engineer names (column A) and holiday day cells stay editable. Use **Review → Unprotect Sheet** (no password) to change structure.
 
 ## Project layout
 
