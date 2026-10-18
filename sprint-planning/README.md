@@ -1,56 +1,36 @@
 # Sprint planning workbook
 
-Generate an Excel workbook for Scrum sprint planning: capacity, committed backlog, velocity, and instructions.
+Generate an Excel workbook for Scrum sprint planning.
 
 ## Quick start
 
 ```bash
 pip install -r requirements.txt
-python3 generate_sprint_planner.py --force   # first time: empty workbook (no sprint tabs)
 ```
 
-Open **Instructions** (last tab) for a fill-in guide.
-
-## Add sprint tabs without losing data
-
-1. Edit `sprint_planner.config.json` — add entries to **`add_sprints`** (not `sprints`):
-
-```json
-"add_sprints": [
-  { "sheet_name": "Sprint 1", "title": "Sprint 1", "goal": "" }
-]
-```
-
-2. Run (no `--force`):
+Set **`"sprints": 5`** in `sprint_planner.config.json` to create five empty tabs (`Sprint 1` … `Sprint 5`) on first generate.
 
 ```bash
-python3 generate_sprint_planner.py
+python3 generate_sprint_planner.py --force
 ```
-
-Existing sprint sheets and backlog data are kept. The **Velocity** tab is rebuilt so **one row per sprint tab** links to committed/completed SP on that sprint (formulas — do not type in Velocity).
-
-3. Clear `add_sprints` after adding (optional) to avoid skipping duplicates on the next run.
 
 ## Commands
 
-| Command | Behaviour |
+| Command | Description |
 | --- | --- |
-| `python3 generate_sprint_planner.py` | If `.xlsx` exists: apply `add_sprints` and refresh Velocity; if `add_sprints` is empty, only refresh Velocity links. |
-| `python3 generate_sprint_planner.py --force` | Recreate entire workbook from config (`sprints` list only). **Overwrites** the file. |
+| `python3 generate_sprint_planner.py` | Create `output_file` from config. Fails if the file already exists. |
+| `python3 generate_sprint_planner.py --force` | Recreate the workbook (uses **`sprints`** count from config). |
+| `python3 generate_sprint_planner.py addsprint 4` | Append 4 sprint tabs to the config `output_file`. |
+| `python3 generate_sprint_planner.py addsprint 4 Sprint-Planning.xlsx` | Append 4 tabs to a specific workbook. |
 
-## Config highlights
+New sprint names continue the sequence (`Sprint 3`, `Sprint 4`, …) based on existing tab names. The **Velocity** sheet is rebuilt with one linked row per sprint tab.
 
-| Field | Purpose |
+## Config
+
+| Field | Description |
 | --- | --- |
-| `sprints` | Used only with **`--force`** (initial sprint tabs). Default sample config uses `[]` (empty). |
-| `add_sprints` | Sprint tabs to append when the file already exists. |
-| `sheet_name` | Required. Excel tab name (max 31 chars). |
-| `start`, `title`, `goal` | Optional; leave empty and fill in Excel. |
+| `sprints` | **Integer** — number of sprint tabs to create on generate (0 = no sprint tabs). |
+| `sprint_name_prefix` | Tab names `{prefix} 1`, `{prefix} 2`, … (default: `Sprint`). |
+| `output_file` | Output `.xlsx` filename. |
 
-## Sheet protection
-
-Formula and label cells are **locked**; editable fields (start date, goal, PTO, FTE, planning velocity, backlog columns except Done SP) are unlocked. Velocity and Instructions tabs are read-only (linked formulas).
-
-## Workbook tabs
-
-**Product backlog** → **Velocity** → **Sprint …** → **Instructions**
+See **Instructions** tab in the workbook for fill-in guidance.

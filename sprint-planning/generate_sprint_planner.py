@@ -25,8 +25,10 @@ THIN = Side(style="thin", color="CCCCCC")
 HEADER_FILL = PatternFill("solid", fgColor="E8EEF4")
 SECTION_FILL = PatternFill("solid", fgColor="D9E2F3")
 SUMMARY_FILL = PatternFill("solid", fgColor="FFF2CC")
-DONE_FILL = PatternFill("solid", fgColor="C6EFCE")
-WARN_FILL = PatternFill("solid", fgColor="FFEB9C")
+DONE_FILL = PatternFill("solid", fgColor="C6EFCE", bgColor="C6EFCE")
+WARN_FILL = PatternFill("solid", fgColor="FFEB9C", bgColor="FFEB9C")
+BLOCKED_FILL = PatternFill("solid", fgColor="FFC7CE", bgColor="FFC7CE")
+IN_PROGRESS_FILL = PatternFill("solid", fgColor="FFD966", bgColor="FFD966")
 
 # Sprint sheet layout (1-based rows)
 META_TITLE_ROW = 1
@@ -66,7 +68,20 @@ BACKLOG_COMMITTED = 7
 BACKLOG_STATUS = 8
 BACKLOG_DEPENDENCY = 9
 BACKLOG_NOTES = 10
-BACKLOG_DONE_SP = 11
+BACKLOG_REMAINING_SP = 11
+BACKLOG_COMPLETED_SP = 12
+
+
+def backlog_completed_sp_formula(row: int) -> str:
+    """Completed SP: full SP when Done; else SP − remaining when remaining is filled."""
+    sp = get_column_letter(BACKLOG_SP)
+    rem = get_column_letter(BACKLOG_REMAINING_SP)
+    status = get_column_letter(BACKLOG_STATUS)
+    return (
+        f'=IF({sp}{row}="","",IF({rem}{row}="",'
+        f'IF({status}{row}="Done",{sp}{row},0),'
+        f'MAX(0,{sp}{row}-{rem}{row})))'
+    )
 
 
 def parse_date(value: str):
@@ -112,17 +127,11 @@ def load_config(path: Path) -> dict[str, Any]:
     if not members or not isinstance(members, list):
         raise ValueError('"team_members" must be a non-empty list of names.')
 
-    sprints = data.get("sprints")
-    if sprints is None:
-        sprints = []
-    if not isinstance(sprints, list):
-        raise ValueError('"sprints" must be a list of sprint definitions.')
-
-    add_sprints = data.get("add_sprints")
-    if add_sprints is None:
-        add_sprints = []
-    if not isinstance(add_sprints, list):
-        raise ValueError('"add_sprints" must be a list of sprint definitions.')
+    sprints = data.get("sprints", 0)
+    if isinstance(sprints, bool) or not isinstance(sprints, int):
+        raise ValueError('"sprints" must be an integer (number of sprint tabs to create).')
+    if sprints < 0:
+        raise ValueError('"sprints" must be >= 0.')
 
     return {
         "output_file": data.get("output_file", "Sprint-Planning.xlsx"),
@@ -143,9 +152,46 @@ def load_config(path: Path) -> dict[str, Any]:
         "prefill_velocity_from_rolling_average": bool(
             data.get("prefill_velocity_from_rolling_average", True)
         ),
-        "sprints": sprints,
-        "add_sprints": add_sprints,
+        "sprint_count": sprints,
+        "sprint_name_prefix": str(data.get("sprint_name_prefix", "Sprint")),
     }
+
+
+def sprint_entry(sheet_name: str, title: str | None = None) -> dict[str, Any]:
+    return {
+        "sheet_name": sheet_name[:31],
+        "title": title or sheet_name,
+        "goal": "",
+    }
+
+
+def sprint_entries_for_range(prefix: str, start_number: int, count: int) -> list[dict[str, Any]]:
+    if count < 1:
+        return []
+    return [
+        sprint_entry(f"{prefix} {start_number + i}")
+        for i in range(count)
+    ]
+
+
+def parse_sprint_numbers(sheet_names: list[str], prefix: str) -> list[int]:
+    numbers: list[int] = []
+    lead = f"{prefix} "
+    for name in sheet_names:
+        if not name.startswith(lead):
+            continue
+        tail = name[len(lead) :].strip()
+        if tail.isdigit():
+            numbers.append(int(tail))
+    return numbers
+
+
+def next_sprint_entries(wb, cfg: dict[str, Any], count: int) -> list[dict[str, Any]]:
+    prefix = cfg["sprint_name_prefix"]
+    existing = ordered_sprint_sheet_names(wb)
+    nums = parse_sprint_numbers(existing, prefix)
+    start = max(nums, default=0) + 1
+    return sprint_entries_for_range(prefix, start, count)
 
 
 def system_sheet_names() -> set[str]:
@@ -214,7 +260,7 @@ def protect_sprint_worksheet(
         unlock_cell(ws, row, COL_PTO)
         unlock_cell(ws, row, COL_FTE)
     for row in range(bf, bl + 1):
-        for col in range(BACKLOG_ID, BACKLOG_NOTES + 1):
+        for col in range(BACKLOG_ID, BACKLOG_REMAINING_SP + 1):
             unlock_cell(ws, row, col)
     enable_sheet_protection(ws)
 
@@ -243,6 +289,35 @@ def apply_table_borders(ws, min_row: int, max_row: int, min_col: int, max_col: i
             ws.cell(row=r, column=c).border = Border(
                 left=THIN, right=THIN, top=THIN, bottom=THIN
             )
+
+
+def status_row_fill(hex_rgb: str) -> PatternFill:
+    """Solid fill for conditional formatting (fg + bg for Excel compatibility)."""
+    return PatternFill("solid", fgColor=hex_rgb, bgColor=hex_rgb)
+
+
+def apply_backlog_status_row_formatting(
+    ws,
+    first_row: int,
+    last_row: int,
+    status_rules: list[tuple[str, PatternFill]],
+) -> None:
+    """Color full backlog rows from Status (3 rules total; OFFSET ties each row to column H)."""
+    if last_row < first_row:
+        return
+    first_col = get_column_letter(BACKLOG_ID)
+    last_col = get_column_letter(BACKLOG_COMPLETED_SP)
+    status_col = get_column_letter(BACKLOG_STATUS)
+    backlog_range = f"{first_col}{first_row}:{last_col}{last_row}"
+    for status_value, fill in status_rules:
+        escaped = status_value.replace('"', '""')
+        ws.conditional_formatting.add(
+            backlog_range,
+            FormulaRule(
+                formula=[f'EXACT(${status_col}{first_row},"{escaped}")'],
+                fill=fill,
+            ),
+        )
 
 
 def style_header_row(ws, row: int, min_col: int, max_col: int):
@@ -561,26 +636,22 @@ def build_sprint_sheet(
         "Status",
         "Dependency / blocker",
         "Notes",
-        "Done SP",
+        "Remaining SP",
+        "Completed SP",
     ]
     for col, label in enumerate(backlog_headers, start=1):
         ws.cell(row=bh, column=col, value=label)
-    style_header_row(ws, bh, 1, BACKLOG_DONE_SP)
+    style_header_row(ws, bh, 1, BACKLOG_COMPLETED_SP)
 
-    status_col = get_column_letter(BACKLOG_STATUS)
     for r in range(bf, bl + 1):
-        ws.cell(
-            row=r,
-            column=BACKLOG_DONE_SP,
-            value=f'=IF({status_col}{r}="Done",E{r},0)',
-        )
+        ws.cell(row=r, column=BACKLOG_COMPLETED_SP, value=backlog_completed_sp_formula(r))
 
     st = layout["summary_title_row"]
     ws.cell(row=st, column=1, value="Sprint results (after sprint)")
     ws.cell(row=st, column=1).font = Font(bold=True, size=12)
 
     committed_formula = committed_sp_sum_formula(bf, bl)
-    done_col = get_column_letter(BACKLOG_DONE_SP)
+    done_col = get_column_letter(BACKLOG_COMPLETED_SP)
     done_range = f"{done_col}{bf}:{done_col}{bl}"
     kpi_committed = f"{get_column_letter(KPI_VALUE_COL)}{KPI_COMMITTED_ROW}"
 
@@ -611,16 +682,17 @@ def build_sprint_sheet(
     ws.cell(
         row=layout["summary_last_row"] + 1,
         column=1,
-        value="Tip: mark candidates with Committed?=Y; watch overview status and per-person headroom.",
+        value="Tip: Committed?=Y for planning; after sprint use Remaining SP or Status=Done for Completed SP.",
     )
     ws.merge_cells(
         start_row=layout["summary_last_row"] + 1,
         start_column=1,
         end_row=layout["summary_last_row"] + 1,
-        end_column=11,
+        end_column=12,
     )
 
     sp_list = list_formula([str(x) for x in cfg["story_point_scale"]])
+    remaining_sp_list = list_formula(["0"] + [str(x) for x in cfg["story_point_scale"]])
     type_list = list_formula(cfg["work_item_types"])
     status_list = list_formula(cfg["statuses"])
     assignee_list = list_formula(team)
@@ -633,6 +705,7 @@ def build_sprint_sheet(
     dv_assignee = DataValidation(type="list", formula1=assignee_list, allow_blank=True)
     dv_priority = DataValidation(type="list", formula1=priority_list, allow_blank=True)
     dv_committed = DataValidation(type="list", formula1=committed_list, allow_blank=True)
+    dv_remaining = DataValidation(type="list", formula1=remaining_sp_list, allow_blank=True)
 
     if bl >= bf:
         cols = {
@@ -642,40 +715,38 @@ def build_sprint_sheet(
             BACKLOG_ASSIGNEE: dv_assignee,
             BACKLOG_PRIORITY: dv_priority,
             BACKLOG_COMMITTED: dv_committed,
+            BACKLOG_REMAINING_SP: dv_remaining,
         }
         for col_idx, dv in cols.items():
             letter = get_column_letter(col_idx)
             dv.add(f"{letter}{bf}:{letter}{bl}")
             ws.add_data_validation(dv)
 
-    title_col = get_column_letter(BACKLOG_TITLE)
     headroom_col = get_column_letter(COL_HEADROOM)
-    ws.conditional_formatting.add(
-        f"{title_col}{bf}:{title_col}{bl}",
-        FormulaRule(
-            formula=[f'${status_col}{bf}="Done"'],
-            fill=DONE_FILL,
-            stopIfTrue=True,
-        ),
-    )
-    ws.conditional_formatting.add(
-        f"{headroom_col}{CAPACITY_FIRST_DATA_ROW}:{headroom_col}{layout['capacity_last']}",
-        FormulaRule(
-            formula=[f"${headroom_col}{CAPACITY_FIRST_DATA_ROW}<0"],
-            fill=PatternFill("solid", fgColor="FFC7CE"),
-            stopIfTrue=True,
-        ),
-    )
+    status_rules = [
+        ("Done", status_row_fill("C6EFCE")),
+        ("Blocked", status_row_fill("FFC7CE")),
+        ("In Progress", status_row_fill("FFD966")),
+    ]
 
     apply_table_borders(ws, CAPACITY_HEADER_ROW, tr, COL_MEMBER, COL_HEADROOM)
     apply_table_borders(ws, KPI_PLANNING_VEL_ROW, KPI_STATUS_ROW, KPI_LABEL_COL, KPI_VALUE_COL)
-    apply_table_borders(ws, bh, bl, 1, BACKLOG_DONE_SP)
+    apply_table_borders(ws, bh, bl, 1, BACKLOG_COMPLETED_SP)
     apply_table_borders(
         ws,
         layout["summary_first_row"],
         layout["summary_first_row"] + len(summary_rows) - 1,
         1,
         2,
+    )
+
+    apply_backlog_status_row_formatting(ws, bf, bl, status_rules)
+    ws.conditional_formatting.add(
+        f"{headroom_col}{CAPACITY_FIRST_DATA_ROW}:{headroom_col}{layout['capacity_last']}",
+        FormulaRule(
+            formula=[f"${headroom_col}{CAPACITY_FIRST_DATA_ROW}<0"],
+            fill=status_row_fill("FFC7CE"),
+        ),
     )
 
     ws.column_dimensions["A"].width = 22
@@ -688,7 +759,8 @@ def build_sprint_sheet(
     ws.column_dimensions["H"].width = 14
     ws.column_dimensions["I"].width = 18
     ws.column_dimensions["J"].width = 22
-    ws.column_dimensions["K"].width = 10
+    ws.column_dimensions["K"].width = 12
+    ws.column_dimensions["L"].width = 12
 
     ws.freeze_panes = ws.cell(row=bf, column=BACKLOG_TITLE).coordinate
 
@@ -877,7 +949,12 @@ def build_product_backlog_sheet(
     first = header_row + 1
     last = first + rows - 1
     if sprint_names is None:
-        sprint_names = [str(s.get("sheet_name", "")) for s in cfg["sprints"]]
+        sprint_names = [
+            e["sheet_name"]
+            for e in sprint_entries_for_range(
+                cfg["sprint_name_prefix"], 1, cfg["sprint_count"]
+            )
+        ]
     target_list = list_formula([""] + sprint_names)
 
     for r in range(first, last + 1):
@@ -991,8 +1068,9 @@ def build_instructions_sheet(ws):
         row,
         "During and after the sprint",
         [
-            "• Update Status (To Do → In Progress → Done). Done SP and Sprint results update from Done items.",
-            "• Velocity (completed SP) on the tab and Velocity sheet reflects completed story points.",
+            "• After the sprint: set Status to Done for finished items, or enter Remaining SP for partial work "
+            "(Completed SP = Story points − Remaining SP). Sprint results and Velocity use Completed SP.",
+            "• Velocity (completed SP) on the tab and Velocity sheet sums the Completed SP column.",
             "• Use carry-over and completion % to discuss unfinished committed work in the retrospective.",
         ],
     )
@@ -1012,11 +1090,11 @@ def build_instructions_sheet(ws):
         "Regenerate vs edit in Excel",
         [
             "• Edit names, dates, backlog, and statuses directly in Excel day to day.",
-            "• Add sprint tabs: put entries in add_sprints in sprint_planner.config.json, then run "
-            "python3 generate_sprint_planner.py (existing sprint data is kept). Use --force only to "
-            "recreate the whole workbook from scratch.",
+            "• Add sprint tabs: python3 generate_sprint_planner.py addsprint 4 Sprint-Planning.xlsx "
+            "(appends 4 new sprint sheets; existing data is kept). Use --force to recreate the workbook.",
             "• Formula cells are locked; editable fields (dates, capacity inputs, backlog, planning velocity) "
-            "stay unlocked. Unprotect a sheet in Excel if you must change structure.",
+            "stay unlocked. Unprotect a sheet in Excel (Review → Unprotect Sheet, no password) to change layout.",
+            "• Velocity and Instructions tabs are sheet-protected (read-only).",
         ],
     )
 
@@ -1028,23 +1106,18 @@ def build_instructions_sheet(ws):
     protect_readonly_worksheet(ws)
 
 
-def validate_sprint_entry(entry: dict[str, Any]) -> None:
-    if "sheet_name" not in entry:
-        raise ValueError('Each sprint entry needs a "sheet_name".')
-
-
 def create_fresh_workbook(cfg: dict[str, Any]) -> Workbook:
     wb = Workbook()
     wb.remove(wb.active)
-    build_product_backlog_sheet(wb.create_sheet(), cfg, sprint_names=[])
+    entries = sprint_entries_for_range(cfg["sprint_name_prefix"], 1, cfg["sprint_count"])
+    build_product_backlog_sheet(
+        wb.create_sheet(), cfg, sprint_names=[e["sheet_name"] for e in entries]
+    )
 
     sprint_meta: list[dict[str, Any]] = []
     previous_meta: dict[str, Any] | None = None
-    total = len(cfg["sprints"])
-    for i, entry in enumerate(cfg["sprints"]):
-        if not isinstance(entry, dict):
-            raise ValueError('Each "sprints" item must be an object.')
-        validate_sprint_entry(entry)
+    total = cfg["sprint_count"]
+    for i, entry in enumerate(entries):
         ws = wb.create_sheet()
         meta = build_sprint_sheet(
             ws,
@@ -1068,14 +1141,15 @@ def create_fresh_workbook(cfg: dict[str, Any]) -> Workbook:
     return wb
 
 
-def add_sprints_to_workbook(wb, cfg: dict[str, Any], entries: list[dict[str, Any]]) -> int:
+def add_sprints_to_workbook(wb, cfg: dict[str, Any], count: int) -> int:
+    if count < 1:
+        raise ValueError("addsprint count must be at least 1.")
+    entries = next_sprint_entries(wb, cfg, count)
     existing = set(ordered_sprint_sheet_names(wb))
     added = 0
     sprint_meta = [sprint_meta_from_sheet_name(n, cfg) for n in ordered_sprint_sheet_names(wb)]
     previous_meta = sprint_meta[-1] if sprint_meta else None
-    total_after = len(existing) + len(
-        [e for e in entries if str(e.get("sheet_name", ""))[:31] not in existing]
-    )
+    total_after = len(existing) + len(entries)
 
     instr_idx = (
         wb.sheetnames.index(INSTRUCTIONS_SHEET_NAME)
@@ -1084,10 +1158,7 @@ def add_sprints_to_workbook(wb, cfg: dict[str, Any], entries: list[dict[str, Any
     )
 
     for entry in entries:
-        if not isinstance(entry, dict):
-            raise ValueError('Each sprint entry must be an object.')
-        validate_sprint_entry(entry)
-        sheet_name = str(entry["sheet_name"])[:31]
+        sheet_name = entry["sheet_name"]
         if sheet_name in existing:
             continue
         ws = wb.create_sheet(sheet_name, instr_idx)
@@ -1115,34 +1186,42 @@ def add_sprints_to_workbook(wb, cfg: dict[str, Any], entries: list[dict[str, Any
     return added
 
 
+def resolve_workbook_path(cfg: dict[str, Any], base_dir: Path, workbook: Path | None) -> Path:
+    if workbook is None:
+        return base_dir / cfg["output_file"]
+    if workbook.is_absolute():
+        return workbook
+    return base_dir / workbook
+
+
 def generate(config_path: Path, force: bool = False) -> Path:
     cfg = load_config(config_path)
     base_dir = config_path.resolve().parent
     out = base_dir / cfg["output_file"]
 
     if out.is_file() and not force:
-        return update_workbook(config_path, cfg, out)
+        raise ValueError(
+            f"{out.name} already exists. Use --force to recreate, or "
+            f"'addsprint N {out.name}' to append sprint tabs."
+        )
 
     wb = create_fresh_workbook(cfg)
     wb.save(out)
     return out
 
 
-def update_workbook(config_path: Path, cfg: dict[str, Any], out: Path) -> Path:
-    wb = load_workbook(out)
-    entries = cfg.get("add_sprints") or []
-    if not entries:
-        sprint_meta = [
-            sprint_meta_from_sheet_name(n, cfg) for n in ordered_sprint_sheet_names(wb)
-        ]
-        rebuild_velocity_tab(wb, sprint_meta, cfg)
-        wb.save(out)
-        return out
+def addsprint(config_path: Path, count: int, workbook: Path | None) -> Path:
+    cfg = load_config(config_path)
+    base_dir = config_path.resolve().parent
+    out = resolve_workbook_path(cfg, base_dir, workbook)
 
-    added = add_sprints_to_workbook(wb, cfg, entries)
-    if added == 0:
-        print("No new sprint tabs added (sheet names already exist).", file=sys.stderr)
+    if not out.is_file():
+        raise ValueError(f"Workbook not found: {out}. Run generate first (with or without --force).")
+
+    wb = load_workbook(out)
+    added = add_sprints_to_workbook(wb, cfg, count)
     wb.save(out)
+    print(f"Added {added} sprint tab(s).", file=sys.stderr)
     return out
 
 
@@ -1160,7 +1239,26 @@ def main():
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Recreate the entire workbook (default: update existing file, add sprints from add_sprints)",
+        help="Recreate the entire workbook from config (including sprint count)",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="generate",
+        choices=("generate", "addsprint"),
+        help="generate (default): create workbook; addsprint: append sprint tabs",
+    )
+    parser.add_argument(
+        "count",
+        nargs="?",
+        type=int,
+        help="With addsprint: number of sprint tabs to add",
+    )
+    parser.add_argument(
+        "workbook",
+        nargs="?",
+        type=Path,
+        help="With addsprint: path to .xlsx (default: output_file from config)",
     )
     args = parser.parse_args()
 
@@ -1171,7 +1269,15 @@ def main():
         sys.exit(1)
 
     try:
-        out = generate(config_path, force=args.force)
+        if args.command == "addsprint":
+            if args.count is None or args.count < 1:
+                print("Usage: generate_sprint_planner.py addsprint COUNT [WORKBOOK.xlsx]", file=sys.stderr)
+                sys.exit(1)
+            out = addsprint(config_path, args.count, args.workbook)
+        else:
+            if args.count is not None:
+                print("Tip: use 'addsprint' to add tabs to an existing workbook.", file=sys.stderr)
+            out = generate(config_path, force=args.force)
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
