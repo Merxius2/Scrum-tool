@@ -18,6 +18,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 DEFAULT_CONFIG_NAME = "sprint_planner.config.json"
+BACKUPS_DIR_NAME = "backups"
 DATE_DISPLAY_FORMAT = "dd-mm-yyyy"
 INSTRUCTIONS_SHEET_NAME = "Instructions"
 PRODUCT_BACKLOG_SHEET = "Product backlog"
@@ -164,9 +165,228 @@ def sprint_working_days_cell_formula(config_working_days: int) -> str:
     )
 
 
-def load_config(path: Path) -> dict[str, Any]:
+def read_config_json(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as f:
-        data = json.load(f)
+        return json.load(f)
+
+
+def write_config_json(path: Path, data: dict[str, Any]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def update_team_members_in_config(path: Path, *, add: str | None, remove: str | None) -> list[str]:
+    data = read_config_json(path)
+    members = [str(m) for m in data.get("team_members") or []]
+    if not members:
+        raise ValueError('"team_members" must be a non-empty list of names.')
+
+    if add is not None:
+        if add in members:
+            raise ValueError(f'"{add}" is already on the team.')
+        members.append(add)
+    if remove is not None:
+        if remove not in members:
+            raise ValueError(f'"{remove}" is not on the team in config.')
+        if len(members) <= 1:
+            raise ValueError("Cannot remove the last team member.")
+        members.remove(remove)
+
+    data["team_members"] = members
+    write_config_json(path, data)
+    return members
+
+
+def read_capacity_rows(ws) -> list[tuple[str, Any, Any]]:
+    rows: list[tuple[str, Any, Any]] = []
+    row = CAPACITY_FIRST_DATA_ROW
+    while True:
+        name = ws.cell(row=row, column=COL_MEMBER).value
+        if name == "Team totals":
+            break
+        if name is None or str(name).strip() == "":
+            break
+        rows.append(
+            (
+                str(name),
+                ws.cell(row=row, column=COL_PTO).value,
+                ws.cell(row=row, column=COL_FTE).value,
+            )
+        )
+        row += 1
+    return rows
+
+
+def extract_sprint_sheet_state(ws, max_backlog_rows: int) -> dict[str, Any]:
+    capacity_rows = read_capacity_rows(ws)
+    layout = sprint_sheet_layout(len(capacity_rows), max_backlog_rows)
+    bf = layout["backlog_first_data"]
+    bl = layout["backlog_last_data"]
+    backlog: list[dict[int, Any]] = []
+    for r in range(bf, bl + 1):
+        row_data: dict[int, Any] = {}
+        for c in range(1, BACKLOG_COMPLETED_SP + 1):
+            if c == BACKLOG_COMPLETED_SP:
+                continue
+            row_data[c] = ws.cell(row=r, column=c).value
+        backlog.append(row_data)
+
+    return {
+        "title": ws.cell(row=META_TITLE_ROW, column=2).value,
+        "start": ws.cell(row=META_START_ROW, column=2).value,
+        "goal": ws.cell(row=META_GOAL_ROW, column=2).value,
+        "capacity": {name: (pto, fte) for name, pto, fte in capacity_rows},
+        "backlog": backlog,
+        "planning_velocity": ws.cell(row=KPI_PLANNING_VEL_ROW, column=KPI_VALUE_COL).value,
+    }
+
+
+def sprint_entry_from_state(sheet_name: str, state: dict[str, Any]) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "sheet_name": sheet_name,
+        "title": state.get("title") or sheet_name,
+        "goal": state.get("goal") or "",
+    }
+    start = state.get("start")
+    if start is not None:
+        if hasattr(start, "strftime"):
+            entry["start"] = start.strftime("%Y-%m-%d")
+        else:
+            entry["start"] = str(start)
+    return entry
+
+
+def restore_sprint_sheet_state(
+    ws,
+    cfg: dict[str, Any],
+    layout: dict[str, int],
+    state: dict[str, Any],
+) -> None:
+    team = cfg["team_members"]
+    bf = layout["backlog_first_data"]
+    bl = layout["backlog_last_data"]
+    capacity = state.get("capacity") or {}
+
+    for i, name in enumerate(team):
+        row = CAPACITY_FIRST_DATA_ROW + i
+        if name not in capacity:
+            continue
+        pto, fte = capacity[name]
+        if pto is not None:
+            ws.cell(row=row, column=COL_PTO, value=pto)
+        if fte is not None:
+            ws.cell(row=row, column=COL_FTE, value=fte)
+
+    for offset, row_data in enumerate(state.get("backlog") or []):
+        r = bf + offset
+        if r > bl:
+            break
+        for c, val in row_data.items():
+            if val is not None and val != "":
+                ws.cell(row=r, column=c, value=val)
+
+    pv = state.get("planning_velocity")
+    if pv is not None and not (isinstance(pv, str) and pv.startswith("=")):
+        ws.cell(row=KPI_PLANNING_VEL_ROW, column=KPI_VALUE_COL, value=pv)
+
+    title = state.get("title")
+    if title:
+        ws.cell(row=META_TITLE_ROW, column=2, value=title)
+    goal = state.get("goal")
+    if goal is not None:
+        ws.cell(row=META_GOAL_ROW, column=2, value=goal)
+    start = state.get("start")
+    if start is not None:
+        ws.cell(row=META_START_ROW, column=2, value=start)
+        ws.cell(row=META_START_ROW, column=2).number_format = DATE_DISPLAY_FORMAT
+
+
+def rebuild_sprint_sheet_preserve(
+    wb,
+    sheet_index: int,
+    sheet_name: str,
+    cfg: dict[str, Any],
+    sprint_index: int,
+    previous_sprint_meta: dict[str, Any] | None,
+    total_sprint_count: int,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name, sheet_index)
+    entry = sprint_entry_from_state(sheet_name, state)
+    meta = build_sprint_sheet(
+        ws,
+        entry,
+        cfg,
+        sprint_index=sprint_index,
+        previous_sprint_meta=previous_sprint_meta,
+        total_sprint_count=total_sprint_count,
+    )
+    layout = sprint_sheet_layout(len(cfg["team_members"]), cfg["max_backlog_rows_per_sprint"])
+    restore_sprint_sheet_state(ws, cfg, layout, state)
+    return meta
+
+
+def mutate_sprint_team(
+    config_path: Path,
+    *,
+    add: str | None,
+    remove: str | None,
+    workbook: Path | None,
+) -> tuple[Path, Path | None, str]:
+    cfg = load_config(config_path)
+    base_dir = config_path.resolve().parent
+    out = resolve_workbook_path(cfg, base_dir, workbook)
+    if not out.is_file():
+        raise ValueError(f"Workbook not found: {out}. Run generate first (with or without --force).")
+
+    backup = backup_workbook_if_exists(out)
+    wb = load_workbook(out)
+    sprint_names = ordered_sprint_sheet_names(wb)
+    if not sprint_names:
+        raise ValueError("No sprint sheets found in workbook.")
+
+    max_rows = cfg["max_backlog_rows_per_sprint"]
+    states = {name: extract_sprint_sheet_state(wb[name], max_rows) for name in sprint_names}
+
+    if add is not None:
+        update_team_members_in_config(config_path, add=add, remove=None)
+        action = f'Added "{add}"'
+    else:
+        assert remove is not None
+        update_team_members_in_config(config_path, add=None, remove=remove)
+        action = f'Removed "{remove}"'
+
+    cfg = load_config(config_path)
+    sprint_meta: list[dict[str, Any]] = []
+    previous_meta: dict[str, Any] | None = None
+    total = len(sprint_names)
+
+    for i, name in enumerate(sprint_names):
+        idx = wb.sheetnames.index(name)
+        meta = rebuild_sprint_sheet_preserve(
+            wb,
+            idx,
+            name,
+            cfg,
+            sprint_index=i,
+            previous_sprint_meta=previous_meta,
+            total_sprint_count=total,
+            state=states[name],
+        )
+        sprint_meta.append(meta)
+        previous_meta = meta
+
+    if PRODUCT_BACKLOG_SHEET in wb.sheetnames:
+        update_product_backlog_sprint_list(wb[PRODUCT_BACKLOG_SHEET], sprint_names)
+    rebuild_velocity_tab(wb, sprint_meta, cfg)
+    wb.save(out)
+    return out, backup, action
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    data = read_config_json(path)
 
     members = data.get("team_members")
     if not members or not isinstance(members, list):
@@ -1320,10 +1540,12 @@ def build_instructions_sheet(ws):
         "Regenerate vs edit in Excel",
         [
             "• Edit names, dates, backlog, and statuses directly in Excel day to day.",
-            "• Add sprint tabs: python3 generate_sprint_planner.py addsprint 4 Sprint-Planning.xlsx "
+            "• Add sprint tabs: python3 generate_sprint_planner.py add-sprint 4 Sprint-Planning.xlsx "
             "(appends 4 new sprint sheets; existing data is kept). Use --force to recreate the workbook.",
-            "• addsprint and --force create a timestamped backup copy next to the .xlsx before saving "
-            "(e.g. Sprint-Planning.backup-20261018-120000.xlsx).",
+            "• Add or remove a team member: add-engineer \"Name\" or remove-engineer \"Name\" "
+            "(updates sprint_planner.config.json and rebuilds capacity rows on every sprint tab; backlog rows are kept).",
+            "• add-sprint and --force save a timestamped copy under backups/ before saving "
+            "(e.g. backups/Sprint-Planning.backup-20261018-120000.xlsx).",
             "• Formula cells are locked; editable fields (dates, capacity inputs, backlog, planning velocity) "
             "stay unlocked. Unprotect a sheet in Excel (Review → Unprotect Sheet, no password) to change layout.",
             "• Velocity and Instructions tabs are sheet-protected (read-only).",
@@ -1375,7 +1597,7 @@ def create_fresh_workbook(cfg: dict[str, Any]) -> Workbook:
 
 def add_sprints_to_workbook(wb, cfg: dict[str, Any], count: int) -> int:
     if count < 1:
-        raise ValueError("addsprint count must be at least 1.")
+        raise ValueError("add-sprint count must be at least 1.")
     entries = next_sprint_entries(wb, cfg, count)
     existing = set(ordered_sprint_sheet_names(wb))
     added = 0
@@ -1427,11 +1649,13 @@ def resolve_workbook_path(cfg: dict[str, Any], base_dir: Path, workbook: Path | 
 
 
 def backup_workbook_if_exists(path: Path) -> Path | None:
-    """Copy existing workbook beside the original with a timestamp before overwriting."""
+    """Copy existing workbook into backups/ with a timestamp before overwriting."""
     if not path.is_file():
         return None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}")
+    backup_dir = path.parent / BACKUPS_DIR_NAME
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"{path.stem}.backup-{stamp}{path.suffix}"
     shutil.copy2(path, backup_path)
     return backup_path
 
@@ -1444,7 +1668,7 @@ def generate(config_path: Path, force: bool = False) -> Path:
     if out.is_file() and not force:
         raise ValueError(
             f"{out.name} already exists. Use --force to recreate, or "
-            f"'addsprint N {out.name}' to append sprint tabs."
+            f"'add-sprint N {out.name}' to append sprint tabs."
         )
 
     backup = backup_workbook_if_exists(out) if out.is_file() else None
@@ -1489,20 +1713,19 @@ def main():
         "command",
         nargs="?",
         default="generate",
-        choices=("generate", "addsprint"),
-        help="generate (default): create workbook; addsprint: append sprint tabs",
+        choices=("generate", "add-sprint", "add-engineer", "remove-engineer"),
+        help="generate (default); add-sprint; add-engineer/remove-engineer: update team roster",
     )
     parser.add_argument(
-        "count",
+        "first_arg",
         nargs="?",
-        type=int,
-        help="With addsprint: number of sprint tabs to add",
+        help="add-sprint: tab count; add-engineer/remove-engineer: team member name",
     )
     parser.add_argument(
         "workbook",
         nargs="?",
         type=Path,
-        help="With addsprint: path to .xlsx (default: output_file from config)",
+        help="Optional path to .xlsx (default: output_file from config)",
     )
     args = parser.parse_args()
 
@@ -1514,14 +1737,40 @@ def main():
 
     try:
         backup: Path | None = None
-        if args.command == "addsprint":
-            if args.count is None or args.count < 1:
-                print("Usage: generate_sprint_planner.py addsprint COUNT [WORKBOOK.xlsx]", file=sys.stderr)
+        if args.command == "add-sprint":
+            if args.first_arg is None:
+                print("Usage: generate_sprint_planner.py add-sprint COUNT [WORKBOOK.xlsx]", file=sys.stderr)
                 sys.exit(1)
-            out, backup = addsprint(config_path, args.count, args.workbook)
+            try:
+                count = int(args.first_arg)
+            except ValueError:
+                print("add-sprint COUNT must be an integer.", file=sys.stderr)
+                sys.exit(1)
+            if count < 1:
+                print("Usage: generate_sprint_planner.py add-sprint COUNT [WORKBOOK.xlsx]", file=sys.stderr)
+                sys.exit(1)
+            out, backup = addsprint(config_path, count, args.workbook)
+        elif args.command in ("add-engineer", "remove-engineer"):
+            if not args.first_arg:
+                verb = args.command
+                print(
+                    f"Usage: generate_sprint_planner.py {verb} NAME [WORKBOOK.xlsx]",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            member_name = str(args.first_arg)
+            if args.command == "add-engineer":
+                out, backup, action = mutate_sprint_team(
+                    config_path, add=member_name, remove=None, workbook=args.workbook
+                )
+            else:
+                out, backup, action = mutate_sprint_team(
+                    config_path, add=None, remove=member_name, workbook=args.workbook
+                )
+            print(f"{action} in config and on all sprint sheets.", file=sys.stderr)
         else:
-            if args.count is not None:
-                print("Tip: use 'addsprint' to add tabs to an existing workbook.", file=sys.stderr)
+            if args.first_arg is not None:
+                print("Tip: use 'add-sprint' to add tabs to an existing workbook.", file=sys.stderr)
             out, backup = generate(config_path, force=args.force)
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

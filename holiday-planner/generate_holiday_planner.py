@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 DEFAULT_CONFIG_NAME = "holiday_planner.config.json"
+BACKUPS_DIR_NAME = "backups"
 DATE_DISPLAY_FORMAT = "%d-%m-%Y"
 
 WEEK_ROW = 1
@@ -104,7 +105,9 @@ def backup_workbook_if_exists(path: Path) -> Path | None:
     if not path.is_file():
         return None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}")
+    backup_dir = path.parent / BACKUPS_DIR_NAME
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"{path.stem}.backup-{stamp}{path.suffix}"
     shutil.copy2(path, backup_path)
     return backup_path
 
@@ -204,9 +207,206 @@ def resolve_period(entry: dict[str, Any], today: date) -> tuple[str, date, date]
     return sheet_name, start, end
 
 
-def load_config(path: Path) -> dict[str, Any]:
+def read_config_json(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as f:
-        data = json.load(f)
+        return json.load(f)
+
+
+def write_config_json(path: Path, data: dict[str, Any]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def update_team_members_in_config(path: Path, *, add: str | None, remove: str | None) -> list[str]:
+    data = read_config_json(path)
+    key = "team_members" if "team_members" in data or "engineers" not in data else "engineers"
+    members = [str(m) for m in (data.get("team_members") or data.get("engineers") or [])]
+    if not members:
+        raise ValueError('"team_members" must be a non-empty list of names.')
+
+    if add is not None:
+        if add in members:
+            raise ValueError(f'"{add}" is already on the team.')
+        members.append(add)
+    if remove is not None:
+        if remove not in members:
+            raise ValueError(f'"{remove}" is not on the team in config.')
+        if len(members) <= 1:
+            raise ValueError("Cannot remove the last team member.")
+        members.remove(remove)
+
+    data[key] = members
+    if key == "team_members" and "engineers" in data and key != "engineers":
+        data.pop("engineers", None)
+    write_config_json(path, data)
+    return members
+
+
+def parse_day_header(value: Any) -> date | None:
+    if value is None:
+        return None
+    parts = str(value).split()
+    if len(parts) < 2:
+        return None
+    try:
+        return datetime.strptime(parts[-1], DATE_DISPLAY_FORMAT).date()
+    except ValueError:
+        return None
+
+
+def holiday_sheet_day_columns(ws) -> list[int]:
+    cols: list[int] = []
+    col = FIRST_DAY_COL
+    while ws.cell(row=DAY_ROW, column=col).value:
+        cols.append(col)
+        col += 1
+    return cols
+
+
+def holiday_sheet_date_range(ws) -> tuple[date, date]:
+    cols = holiday_sheet_day_columns(ws)
+    if not cols:
+        raise ValueError(f'Sheet "{ws.title}" has no weekday columns.')
+    dates = [d for c in cols if (d := parse_day_header(ws.cell(row=DAY_ROW, column=c).value))]
+    if not dates:
+        raise ValueError(f'Sheet "{ws.title}" has no parseable day headers.')
+    return min(dates), max(dates)
+
+
+def capture_holiday_marks(ws) -> dict[str, dict[int, Any]]:
+    marks: dict[str, dict[int, Any]] = {}
+    row = FIRST_DATA_ROW
+    while True:
+        name = ws.cell(row=row, column=NAME_COL).value
+        if name is None or str(name).strip() == "":
+            break
+        if str(name) == "Total on holiday":
+            break
+        name_str = str(name)
+        day_vals: dict[int, Any] = {}
+        for col in holiday_sheet_day_columns(ws):
+            day_vals[col] = ws.cell(row=row, column=col).value
+        marks[name_str] = day_vals
+        row += 1
+    return marks
+
+
+def name_color_from_cell(cell) -> str | None:
+    if not cell.fill or not cell.fill.fgColor:
+        return None
+    fg = cell.fill.fgColor.rgb
+    if not fg or fg in ("00000000", "0"):
+        return None
+    return (fg[2:] if len(fg) == 8 else fg).upper()
+
+
+def engineer_colors_for_team(
+    wb,
+    team_members: list[str],
+    cfg: dict[str, Any],
+) -> list[str]:
+    name_to_color: dict[str, str] = {}
+    for sheet in wb.worksheets:
+        row = FIRST_DATA_ROW
+        while True:
+            name = sheet.cell(row=row, column=NAME_COL).value
+            if name is None or str(name) == "Total on holiday":
+                break
+            color = name_color_from_cell(sheet.cell(row=row, column=NAME_COL))
+            if color:
+                name_to_color[str(name)] = color
+            row += 1
+        if name_to_color:
+            break
+
+    rng = random.Random(cfg.get("color_seed"))
+    used = set(name_to_color.values())
+    colors: list[str] = []
+    for name in team_members:
+        if name in name_to_color:
+            colors.append(name_to_color[name])
+            continue
+        for _ in range(64):
+            candidate = assign_engineer_colors(1, rng)[0]
+            if candidate not in used:
+                used.add(candidate)
+                colors.append(candidate)
+                break
+        else:
+            colors.append(assign_engineer_colors(1, rng)[0])
+    return colors
+
+
+def rebuild_holiday_sheet(
+    wb,
+    sheet_index: int,
+    team_members: list[str],
+    holiday_marker: str,
+    engineer_colors: list[str],
+    marks: dict[str, dict[int, Any]],
+) -> None:
+    old = wb.worksheets[sheet_index]
+    title = old.title
+    start, end = holiday_sheet_date_range(old)
+    marks_snapshot = marks
+    del wb[title]
+    ws = wb.create_sheet(title, sheet_index)
+    build_sheet(ws, title, start, end, team_members, holiday_marker, engineer_colors)
+    day_cols = holiday_sheet_day_columns(ws)
+    for i, name in enumerate(team_members):
+        row = FIRST_DATA_ROW + i
+        saved = marks_snapshot.get(name, {})
+        for col in day_cols:
+            val = saved.get(col)
+            if val is not None and str(val).strip() != "":
+                ws.cell(row=row, column=col, value=val)
+
+
+def mutate_holiday_team(
+    config_path: Path,
+    *,
+    add: str | None,
+    remove: str | None,
+    workbook: Path | None,
+) -> tuple[Path, Path | None, str]:
+    cfg = load_config(config_path)
+    base_dir = config_path.resolve().parent
+    out = resolve_workbook_path(cfg, base_dir, workbook)
+    if not out.is_file():
+        raise ValueError(f"Workbook not found: {out}. Run generate first (with or without --force).")
+
+    backup = backup_workbook_if_exists(out)
+    wb = load_workbook(out)
+    sheet_titles = list(wb.sheetnames)
+    sheet_marks = {title: capture_holiday_marks(wb[title]) for title in sheet_titles}
+
+    if add is not None:
+        update_team_members_in_config(config_path, add=add, remove=None)
+        action = f'Added "{add}"'
+    else:
+        assert remove is not None
+        update_team_members_in_config(config_path, add=None, remove=remove)
+        action = f'Removed "{remove}"'
+
+    cfg = load_config(config_path)
+    colors = engineer_colors_for_team(wb, cfg["team_members"], cfg)
+    for title in sheet_titles:
+        idx = wb.sheetnames.index(title)
+        rebuild_holiday_sheet(
+            wb,
+            idx,
+            cfg["team_members"],
+            cfg["holiday_marker"],
+            colors,
+            sheet_marks[title],
+        )
+    wb.save(out)
+    return out, backup, action
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    data = read_config_json(path)
 
     members = data.get("team_members") or data.get("engineers")
     if not members or not isinstance(members, list):
@@ -507,7 +707,7 @@ def generate(config_path: Path, force: bool = False, today: date | None = None) 
     if out.is_file() and not force:
         raise ValueError(
             f"{out.name} already exists. Use --force to recreate, or "
-            f"'addyear 2028 {out.name}' to append a year sheet."
+            f"'add-year 2028 {out.name}' to append a year sheet."
         )
 
     backup = backup_workbook_if_exists(out) if out.is_file() else None
@@ -523,7 +723,7 @@ def addyear(
     today: date | None = None,
 ) -> tuple[Path, Path | None, int]:
     if not years:
-        raise ValueError("addyear requires at least one calendar year (e.g. addyear 2028).")
+        raise ValueError("add-year requires at least one calendar year (e.g. add-year 2028).")
     cfg = load_config(config_path)
     today = today or date.today()
     base_dir = config_path.resolve().parent
@@ -582,13 +782,13 @@ def main():
         "command",
         nargs="?",
         default="generate",
-        choices=("generate", "addyear"),
-        help="generate (default): create workbook; addyear: append calendar year sheet(s)",
+        choices=("generate", "add-year", "add-engineer", "remove-engineer"),
+        help="generate (default); add-year; add-engineer/remove-engineer: update team roster",
     )
     parser.add_argument(
         "year_args",
         nargs="*",
-        help="With addyear: one or more years (e.g. 2028), optional path to .xlsx last",
+        help="add-year: years + optional .xlsx; add/remove-engineer: NAME [WORKBOOK.xlsx]",
     )
     args = parser.parse_args()
 
@@ -600,7 +800,7 @@ def main():
 
     try:
         backup: Path | None = None
-        if args.command == "addyear":
+        if args.command == "add-year":
             years: list[int] = []
             workbook: Path | None = None
             for raw in args.year_args:
@@ -610,16 +810,38 @@ def main():
                 years.append(int(raw))
             if not years:
                 print(
-                    "Usage: generate_holiday_planner.py addyear YEAR [YEAR ...] [WORKBOOK.xlsx]",
+                    "Usage: generate_holiday_planner.py add-year YEAR [YEAR ...] [WORKBOOK.xlsx]",
                     file=sys.stderr,
                 )
                 sys.exit(1)
             out, backup, added = addyear(config_path, years, workbook)
             if added:
                 print(f"Added {added} year sheet(s).", file=sys.stderr)
+        elif args.command in ("add-engineer", "remove-engineer"):
+            workbook: Path | None = None
+            name_parts = list(args.year_args)
+            if name_parts and name_parts[-1].lower().endswith(".xlsx"):
+                workbook = Path(name_parts.pop())
+            if not name_parts:
+                verb = args.command
+                print(
+                    f"Usage: generate_holiday_planner.py {verb} NAME [WORKBOOK.xlsx]",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            member_name = " ".join(name_parts)
+            if args.command == "add-engineer":
+                out, backup, action = mutate_holiday_team(
+                    config_path, add=member_name, remove=None, workbook=workbook
+                )
+            else:
+                out, backup, action = mutate_holiday_team(
+                    config_path, add=None, remove=member_name, workbook=workbook
+                )
+            print(f"{action} in config and on all holiday sheets.", file=sys.stderr)
         else:
             if args.year_args:
-                print("Tip: use 'addyear 2028' to append a year to an existing workbook.", file=sys.stderr)
+                print("Tip: use 'add-year 2028' to append a year to an existing workbook.", file=sys.stderr)
             out, backup = generate(config_path, force=args.force)
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

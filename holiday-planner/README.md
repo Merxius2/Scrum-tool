@@ -20,7 +20,7 @@ Generate an Excel workbook for planning team time off. Each team member gets a r
 
 4. Open `Team-Holiday-Planner.xlsx` (or the filename set in config).
 
-Dates in headers use **`dd-mm-yyyy`** (e.g. `Mon 06-01-2027`). Before **`--force`** or **`addyear`** overwrites the file, the script saves a timestamped backup next to it (e.g. `Team-Holiday-Planner.backup-20261018-120000.xlsx`).
+Dates in headers use **`dd-mm-yyyy`** (e.g. `Mon 06-01-2027`). Before **`--force`**, **`add-year`**, or team commands overwrite the file, the script copies it into **`backups/`** (created if needed), e.g. `backups/Team-Holiday-Planner.backup-20261018-120000.xlsx`.
 
 ## Using the spreadsheet
 
@@ -31,7 +31,7 @@ Dates in headers use **`dd-mm-yyyy`** (e.g. `Mon 06-01-2027`). Before **`--force
 - The **Total on holiday** row uses formulas to count markers per day.
 - Conditional formatting on that row: **0** = green, **1–2** = yellow, **3+** = red (more than two engineers away).
 
-Column A names can be edited in Excel after generation; re-run the script if you change names in config and want a fresh file (and new colours, unless you set `color_seed`).
+Column A names can be edited in Excel after generation. To add or remove someone officially, use **`add-engineer`** / **`remove-engineer`** (updates config and all sheets) rather than only editing JSON and `--force`.
 
 ## Configuration
 
@@ -106,8 +106,10 @@ Alternative keys `start` / `end` / `to` are accepted instead of `from` / `throug
 | --- | --- |
 | `python3 generate_holiday_planner.py` | Create workbook from config. Fails if the file already exists. |
 | `python3 generate_holiday_planner.py --force` | Recreate the whole workbook (backup first if file exists). |
-| `python3 generate_holiday_planner.py addyear 2028` | Append a **2028** sheet; keeps existing sheets and holiday marks. |
-| `python3 generate_holiday_planner.py addyear 2028 2029 Team-Holiday-Planner.xlsx` | Append multiple years to a specific file. |
+| `python3 generate_holiday_planner.py add-year 2028` | Append a **2028** sheet; keeps existing sheets and holiday marks. |
+| `python3 generate_holiday_planner.py add-year 2028 2029 Team-Holiday-Planner.xlsx` | Append multiple years to a specific file. |
+| `python3 generate_holiday_planner.py add-engineer "Jane Doe"` | Append a name to `team_members` in config and add a row on every sheet (backup first). |
+| `python3 generate_holiday_planner.py remove-engineer "Engineer 2"` | Remove a name from config and drop that row on every sheet; other members’ `H` marks are kept. |
 
 ```bash
 python3 generate_holiday_planner.py -c /path/to/other-config.json
@@ -121,7 +123,6 @@ The default config path is `holiday_planner.config.json` in the same folder as t
 
 ```
 holiday-planner/
-├── AGENTS.md                     # agent context (Cursor auto-loads in this folder)
 ├── README.md
 ├── requirements.txt
 ├── holiday_planner.config.json

@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "repository": "scrum-tool",
+  "summary": "Python 3 + openpyxl CLIs that generate Excel workbooks for team holidays and sprint planning.",
+  "bootstrap": [
+    "Load repo-map.json for structure and entrypoints.",
+    "Read AGENTS.md at repository root (all tool agent context).",
+    "Before changing a tool: read AGENTS.md section for that tool and <tool>/README.md."
+  ],
+  "agentsDoc": "AGENTS.md",
+  "tools": [
+    {
+      "id": "holiday-planner",
+      "path": "holiday-planner/",
+      "generator": "holiday-planner/generate_holiday_planner.py",
+      "config": "holiday-planner/holiday_planner.config.json",
+      "outputXlsx": "holiday-planner/Team-Holiday-Planner.xlsx",
+      "backups": "holiday-planner/backups/",
+      "readme": "holiday-planner/README.md",
+      "requirements": "holiday-planner/requirements.txt",
+      "cli": {
+        "default": "generate",
+        "commands": ["generate", "add-year", "add-engineer", "remove-engineer"],
+        "flags": ["--force", "-c CONFIG"]
+      },
+      "configKeys": ["team_members", "years", "output_file", "holiday_marker", "color_seed"],
+      "testModule": "generate_holiday_planner",
+      "tests": "tests/test_holiday_planner.py"
+    },
+    {
+      "id": "sprint-planning",
+      "path": "sprint-planning/",
+      "generator": "sprint-planning/generate_sprint_planner.py",
+      "config": "sprint-planning/sprint_planner.config.json",
+      "outputXlsx": "sprint-planning/Sprint-Planning.xlsx",
+      "backups": "sprint-planning/backups/",
+      "readme": "sprint-planning/README.md",
+      "requirements": "sprint-planning/requirements.txt",
+      "cli": {
+        "default": "generate",
+        "commands": ["generate", "add-sprint", "add-engineer", "remove-engineer"],
+        "flags": ["--force", "-c CONFIG"]
+      },
+      "configKeys": [
+        "team_members",
+        "sprints",
+        "sprint_name_prefix",
+        "sprint_length",
+        "output_file",
+        "story_point_scale",
+        "max_backlog_rows_per_sprint",
+        "product_backlog_rows"
+      ],
+      "systemSheets": ["Product backlog", "Velocity", "Instructions"],
+      "testModule": "generate_sprint_planner",
+      "tests": "tests/test_sprint_planner.py"
+    }
+  ],
+  "shared": {
+    "rootReadme": "README.md",
+    "requirementsDev": "requirements-dev.txt",
+    "testsDir": "tests/",
+    "conftest": "tests/conftest.py",
+    "pytest": {
+      "all": "python3 -m pytest tests/ -v",
+      "coverage": "python3 -m pytest tests/ -q --cov=generate_holiday_planner --cov=generate_sprint_planner --cov-report=term-missing"
+    }
+  },
+  "gitignoreOutputs": [
+    "holiday-planner/Team-Holiday-Planner.xlsx",
+    "holiday-planner/backups/",
+    "sprint-planning/Sprint-Planning.xlsx",
+    "sprint-planning/backups/",
+    "*.backup-*.xlsx"
+  ],
+  "conventions": {
+    "language": "Python 3",
+    "excelLibrary": "openpyxl",
+    "commitGeneratedXlsx": false,
+    "backupBeforeOverwrite": true
+  }
+}

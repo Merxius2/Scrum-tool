@@ -1,11 +1,15 @@
 __pycache__/
+.pytest_cache/
+.coverage
 *.py[cod]
 .DS_Store
 .venv/
 venv/
 holiday-planner/Team-Holiday-Planner.xlsx
+holiday-planner/backups/
 holiday-planner/*.backup-*.xlsx
 sprint-planning/Sprint-Planning.xlsx
+sprint-planning/backups/
 sprint-planning/*.backup-*.xlsx
 sprint-planning/~$*.xlsx
 **/~$*.xlsx

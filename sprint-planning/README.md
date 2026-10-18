@@ -20,12 +20,14 @@ python3 generate_sprint_planner.py --force
 | --- | --- |
 | `python3 generate_sprint_planner.py` | Create `output_file` from config. Fails if the file already exists. |
 | `python3 generate_sprint_planner.py --force` | Recreate the workbook (uses **`sprints`** count from config). |
-| `python3 generate_sprint_planner.py addsprint 4` | Append 4 sprint tabs to the config `output_file`. |
-| `python3 generate_sprint_planner.py addsprint 4 Sprint-Planning.xlsx` | Append 4 tabs to a specific workbook. |
+| `python3 generate_sprint_planner.py add-sprint 4` | Append 4 sprint tabs to the config `output_file`. |
+| `python3 generate_sprint_planner.py add-sprint 4 Sprint-Planning.xlsx` | Append 4 tabs to a specific workbook. |
+| `python3 generate_sprint_planner.py add-engineer "Jane Doe"` | Append a name to `team_members` in config and rebuild capacity rows on every sprint tab (backlog data kept). |
+| `python3 generate_sprint_planner.py remove-engineer "Engineer 2"` | Remove a name from config and rebuild sprint tabs without that capacity row. |
 
 New sprint names continue the sequence (`Sprint 3`, `Sprint 4`, …) based on existing tab names. The **Velocity** sheet is rebuilt with one linked row per sprint tab.
 
-Before **`addsprint`** or **`generate --force`** overwrites an existing file, the script saves a timestamped backup next to it (e.g. `Sprint-Planning.backup-20261018-120000.xlsx`).
+Before **`add-sprint`**, **`generate --force`**, or team commands overwrite an existing file, the script copies it into **`backups/`** (created if needed), e.g. `backups/Sprint-Planning.backup-20261018-120000.xlsx`.
 
 ## Config
 
