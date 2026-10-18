@@ -2,6 +2,8 @@
 
 Tools that help teams working in a Scrum configuration.
 
+Open this folder (`…/Scrum-tool/scrum-tool`) as your Cursor/IDE workspace — it is the git repository root.
+
 ## Tools
 
 | Tool | Description |
